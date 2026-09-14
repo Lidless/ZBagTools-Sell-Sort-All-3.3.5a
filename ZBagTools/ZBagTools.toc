@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: ZBagTools
+## Notes: Egy gombos szurke-item eladas boltnal, es reszleges stack-ek osszevonasa. /zsell /zsort
+## SavedVariables: ZBagToolsPos
+## DefaultState: Enabled
+
+ZBagTools.lua
