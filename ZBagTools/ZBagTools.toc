@@ -1,6 +1,6 @@
 ## Interface: 30300
 ## Title: ZBagTools
-## Notes: Egy gombos szurke-item eladas boltnal, es reszleges stack-ek osszevonasa. /zsell /zsort
+## Notes: One-click grey item selling at vendors, partial stack merging and bag compacting. /zsell /zsort /zbagsall
 ## SavedVariables: ZBagToolsPos
 ## DefaultState: Enabled
 
