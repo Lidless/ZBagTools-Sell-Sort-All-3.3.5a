@@ -42,7 +42,10 @@ Locked slots are skipped. Before every pass Sort waits for the server to confirm
 
 ### Sell Grey (`Sell` button / `/zsell`)
 
-Sells every grey (poor quality) item in your bags in one click. The button is only active while a merchant window is open.
+Sells every grey (poor quality) item in your bags in one click. Left-click only works while a merchant window is open; away from a vendor the button looks greyed out.
+
+- **Auto sell:** right-click the `Sell` button (or use `/zbag autosell`) to toggle it. While it's on, the button has a green border and your greys are sold automatically a moment after you open a vendor. The setting is saved account-wide.
+- **Sort after selling:** whenever something was actually sold (manually or automatically), Sort runs by itself once the sold items have left your bags. After a sale it only reports in chat if it actually moved something.
 
 ### Close all bags (`X` button)
 
@@ -58,11 +61,12 @@ The button row (`Sell` `Sort` `Bag/All/Box` `X`) lives inside the Backpack windo
 |---------|--------|
 | `/zbag` | Lists the options |
 | `/zbag mode bag\|all\|box` | Sets the bag mode (same as the mode button) |
+| `/zbag autosell [on\|off]` | Toggles automatic grey selling at vendors (same as right-clicking `Sell`) |
 | `/zbag cols <4-24>` | Number of columns in the combined window (default 10) |
 | `/zbag scale <0.5-2>` | Scale of the combined window |
 | `/zbag reset` | Resets the combined window's position, scale and columns |
 | `/zsort` | Sort your bags |
-| `/zsell` | Sell all grey items (merchant window must be open) |
+| `/zsell` | Sell all grey items, then Sort (merchant window must be open) |
 | `/zbagsall` | Open/close all bags in separate windows (same as Shift+B) |
 | `/zbagdebug` | Prints the current mode and diagnostic info about the container API and bag contents |
 

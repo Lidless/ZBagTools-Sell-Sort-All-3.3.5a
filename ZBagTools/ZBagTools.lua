@@ -96,7 +96,7 @@ end
 -- Beallitasok (account szintu SavedVariables)
 ----------------------------------------------------------------
 
-local DEFAULTS = {mode = "bag", cols = 10, scale = 1}
+local DEFAULTS = {mode = "bag", cols = 10, scale = 1, autoSell = false}
 local MODES = {"bag", "all", "box"}
 local MODE_LABEL = {bag = "Bag", all = "All", box = "Box"}
 local MODE_DESC = {
@@ -147,27 +147,32 @@ end
 -- kereskedonel vagyunk-e: a MERCHANT_SHOW / MERCHANT_CLOSED esemeny allitja
 local atMerchant = false
 
-local function SellGrey()
+-- visszaadja az eladott slotok listajat (a Sort ezek eltuneset varja meg)
+-- auto = true: automatikus eladas, ilyenkor nem szol, ha nincs mit eladni
+local function SellGrey(auto)
 	if not (atMerchant or (MerchantFrame and MerchantFrame:IsShown())) then
-		p("Only usable at a vendor (open the merchant window first).")
-		return
+		if not auto then
+			p("Only usable at a vendor (open the merchant window first).")
+		end
+		return {}
 	end
-	local sold = 0
+	local soldSlots = {}
 	for _, bag in ipairs(BAGS) do
 		local slots = NumSlots(bag)
 		for slot = 1, slots do
 			local link = GetLink(bag, slot)
 			if link and IsGrey(link, nil) then
 				UseSlot(bag, slot)
-				sold = sold + 1
+				table.insert(soldSlots, {bag = bag, slot = slot, link = link})
 			end
 		end
 	end
-	if sold > 0 then
-		p("Sold " .. sold .. " grey item(s).")
-	else
+	if #soldSlots > 0 then
+		p((auto and "Auto-sold " or "Sold ") .. #soldSlots .. " grey item(s).")
+	elseif not auto then
 		p("No grey items to sell in your bags.")
 	end
+	return soldSlots
 end
 
 ----------------------------------------------------------------
@@ -416,7 +421,9 @@ local sortState = {running = false}
 local function SortStop(msg)
 	sortState.running = false
 	sortRunner:SetScript("OnUpdate", nil)
-	p(msg)
+	if msg then
+		p(msg)
+	end
 end
 
 local function SortStep()
@@ -441,12 +448,19 @@ local function SortStep()
 		sortState.totalMoves = sortState.totalMoves + n
 		sortState.passes = sortState.passes + 1
 		if n == 0 or sortState.passes >= SORT_MAX_PASSES then
-			SortStop(string.format("Done: %d stack merges, %d items moved to special bags, %d gaps filled.", sortState.totalMerges, sortState.totalSpecial, sortState.totalMoves))
+			local changed = sortState.totalMerges + sortState.totalSpecial + sortState.totalMoves
+			if sortState.quiet and changed == 0 then
+				-- eladas utani auto Sort: ha nem tortent semmi, nem szolunk
+				SortStop(nil)
+			else
+				SortStop(string.format("Done: %d stack merges, %d items moved to special bags, %d gaps filled.", sortState.totalMerges, sortState.totalSpecial, sortState.totalMoves))
+			end
 		end
 	end
 end
 
-local function SortBags()
+-- quiet = true: eladas utani auto Sort (0 valtozasnal nem ir a chatbe)
+local function StartSort(quiet)
 	if CursorHasItem and CursorHasItem() then
 		p("Put down the item on your cursor first.")
 		return
@@ -455,6 +469,7 @@ local function SortBags()
 		return
 	end
 	sortState.running = true
+	sortState.quiet = quiet and true or false
 	sortState.phase = "merge"
 	sortState.passes = 0
 	sortState.totalMerges = 0
@@ -481,6 +496,11 @@ local function SortBags()
 		sortState.waited = 0
 		SortStep()
 	end)
+end
+
+-- normal Sort (gomb, /zsort): mindig kiirja az eredmenyt
+local function SortBags()
+	StartSort(false)
 end
 
 ----------------------------------------------------------------
@@ -896,6 +916,62 @@ CloseAllBags = function(...)
 end
 
 ----------------------------------------------------------------
+-- Eladas + utana Sort (csak ha tenyleg kelt el valami)
+-- A Sort-ot csak akkor inditjuk, amikor az eladott itemek mar eltuntek
+-- a zsakbol (a szerver visszaigazolta), vagy max. 3 mp utan.
+----------------------------------------------------------------
+
+local SELL_SORT_TIMEOUT = 3
+local AUTOSELL_DELAY = 0.3
+
+local afterSell = CreateFrame("Frame")
+
+local function SoldItemsGone(soldSlots)
+	for _, s in ipairs(soldSlots) do
+		if GetLink(s.bag, s.slot) == s.link then
+			return false
+		end
+	end
+	return true
+end
+
+local function SellAndSort(auto)
+	local soldSlots = SellGrey(auto)
+	if #soldSlots == 0 then
+		return
+	end
+	local waited = 0
+	afterSell:SetScript("OnUpdate", function(self, elapsed)
+		waited = waited + elapsed
+		if waited < 0.2 then
+			return
+		end
+		if SoldItemsGone(soldSlots) or waited > SELL_SORT_TIMEOUT then
+			self:SetScript("OnUpdate", nil)
+			StartSort(true)
+		end
+	end)
+end
+
+-- auto eladas kereskedo nyitasakor, kis kesleltetessel
+local autoSellTimer = CreateFrame("Frame")
+local function ScheduleAutoSell()
+	if not DB().autoSell then
+		return
+	end
+	local waited = 0
+	autoSellTimer:SetScript("OnUpdate", function(self, elapsed)
+		waited = waited + elapsed
+		if waited >= AUTOSELL_DELAY then
+			self:SetScript("OnUpdate", nil)
+			if atMerchant then
+				SellAndSort(true)
+			end
+		end
+	end)
+end
+
+----------------------------------------------------------------
 -- Gombsor: Sell | Sort | Bag/All/Box | X
 -- Ket helyen van: a Backpack ablakban es a kozos ablak fejleceben.
 ----------------------------------------------------------------
@@ -903,14 +979,63 @@ end
 local modeButtons = {}
 local sellButtons = {}
 
--- a Sell gomb csak kereskedonel aktiv
+-- A Sell gomb mindig kattinthato (jobb klikk = auto ki/be), de kereskedon
+-- kivul szurkenek latszik es a bal klikkre nem reagal.
+-- Auto modban zold keretet kap.
 local function UpdateSellButtons()
+	local auto = DB().autoSell
 	for _, b in ipairs(sellButtons) do
+		local fs = b:GetFontString()
+		local tex = b:GetNormalTexture()
 		if atMerchant then
-			b:Enable()
+			if fs then fs:SetTextColor(1, 0.82, 0) end
+			if tex then tex:SetDesaturated(false) end
 		else
-			b:Disable()
+			if fs then fs:SetTextColor(0.5, 0.5, 0.5) end
+			if tex then tex:SetDesaturated(true) end
 		end
+		if auto then
+			b.zbAutoFrame:Show()
+		else
+			b.zbAutoFrame:Hide()
+		end
+	end
+end
+
+local function SellTooltip(self)
+	local auto = DB().autoSell
+	GameTooltip:SetOwner(self, "ANCHOR_TOP")
+	GameTooltip:SetText("Sell grey items")
+	if auto then
+		GameTooltip:AddLine("Auto sell: ON - greys are sold when you open a vendor", 0.2, 1, 0.2, true)
+	else
+		GameTooltip:AddLine("Auto sell: OFF", 1, 1, 1)
+	end
+	if atMerchant then
+		GameTooltip:AddLine("Left-click: sell now (then Sort)", 0.6, 0.8, 1)
+	else
+		GameTooltip:AddLine("Left-click: only at a vendor", 0.6, 0.6, 0.6)
+	end
+	GameTooltip:AddLine("Right-click: toggle auto sell", 0.6, 0.8, 1)
+	GameTooltip:Show()
+end
+
+local function SetAutoSell(on)
+	if ZBagToolsDB then
+		ZBagToolsDB.autoSell = on and true or false
+	end
+	UpdateSellButtons()
+end
+
+local function SellClick(self, button)
+	if button == "RightButton" then
+		SetAutoSell(not DB().autoSell)
+		p("Auto sell " .. (DB().autoSell and "ON" or "OFF") .. ".")
+		if GameTooltip:IsOwned(self) then
+			SellTooltip(self)
+		end
+	elseif atMerchant then
+		SellAndSort(false)
 	end
 end
 
@@ -967,8 +1092,19 @@ local function CreateToolbar(name, parent)
 	sell:SetHeight(20)
 	sell:SetText("Sell")
 	sell:SetPoint("LEFT", bar, "LEFT", 0, 0)
-	sell:SetScript("OnClick", SellGrey)
-	SimpleTooltip(sell, "Sell grey items (vendor only)")
+	sell:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	sell:SetScript("OnClick", SellClick)
+	sell:SetScript("OnEnter", SellTooltip)
+	sell:SetScript("OnLeave", GameTooltip_Hide)
+	-- zold keret auto modhoz
+	local af = CreateFrame("Frame", nil, sell)
+	af:SetPoint("TOPLEFT", sell, "TOPLEFT", -3, 3)
+	af:SetPoint("BOTTOMRIGHT", sell, "BOTTOMRIGHT", 3, -3)
+	af:SetBackdrop({edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10})
+	af:SetBackdropBorderColor(0.1, 1, 0.1, 1)
+	af:SetFrameLevel(sell:GetFrameLevel() + 2)
+	af:Hide()
+	sell.zbAutoFrame = af
 	table.insert(sellButtons, sell)
 
 	local sort = CreateFrame("Button", name .. "Sort", bar, "UIPanelButtonTemplate")
@@ -1082,6 +1218,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
 		atMerchant = true
 		UpdateSellButtons()
 		OpenModeView()
+		ScheduleAutoSell()
 	elseif event == "MERCHANT_CLOSED" then
 		if atMerchant then
 			atMerchant = false
@@ -1104,7 +1241,7 @@ UpdateModeButtons()
 ----------------------------------------------------------------
 
 SLASH_ZSELL1 = "/zsell"
-SlashCmdList["ZSELL"] = SellGrey
+SlashCmdList["ZSELL"] = function() SellAndSort(false) end
 
 SLASH_ZSORT1 = "/zsort"
 SlashCmdList["ZSORT"] = SortBags
@@ -1123,6 +1260,15 @@ SlashCmdList["ZBAG"] = function(msg)
 		CloseAll()
 		OpenModeView()
 		p("Mode: " .. MODE_LABEL[arg] .. " (" .. MODE_DESC[arg] .. ")")
+	elseif cmd == "autosell" then
+		if arg == "on" then
+			SetAutoSell(true)
+		elseif arg == "off" then
+			SetAutoSell(false)
+		else
+			SetAutoSell(not DB().autoSell)
+		end
+		p("Auto sell " .. (DB().autoSell and "ON" or "OFF") .. ".")
 	elseif cmd == "cols" and tonumber(arg) then
 		local n = math.floor(tonumber(arg))
 		if n < 4 then n = 4 elseif n > 24 then n = 24 end
@@ -1145,6 +1291,7 @@ SlashCmdList["ZBAG"] = function(msg)
 	else
 		p("Commands:")
 		p("  /zbag mode bag|all|box - bag mode (same as the Bag/All/Box button)")
+		p("  /zbag autosell [on|off] - sell greys automatically at vendors (now " .. (DB().autoSell and "on" or "off") .. ")")
 		p("  /zbag cols <4-24> - columns in the Box window (now " .. tostring(DB().cols) .. ")")
 		p("  /zbag scale <0.5-2> - Box window scale (now " .. tostring(DB().scale) .. ")")
 		p("  /zbag reset - reset Box window position, scale and columns")
