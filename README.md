@@ -1,23 +1,78 @@
-ZBagTools
-A lightweight bag-management addon for WotLK 3.3.5a, built for the Grimfall private server. It adds one-button bag sorting and grey-item selling — features that didn't exist yet in WotLK — directly into the Backpack window.
-Features
-Sort (`Sort` button / `/zsort`)
-Cleans up your bags in one click: merges partial item stacks together, then compacts everything so there are no empty gaps left between items — across all your bags at once (Backpack, and bags 1-4), filling them right to left the same way they're laid out on the default bag bar. Bag moves aren't instant on the server, so Sort automatically re-runs itself a few times (up to 8 passes, spaced out over a fraction of a second) until nothing changes anymore. You only need to press it once.
-Sell Grey (`Sell` button / `/zsell`)
-Sells every grey (poor quality) item in your bags in one click. Only works while a merchant window is open, exactly like the vendor's own "sell junk" behavior.
-Toggle All Bags (`All` button / `/zbagsall`)
-Opens all of your bags at once, and — press it again — closes them all again. Same behavior as the default Shift+B shortcut, just as a clickable button.
-Where the buttons are
-The button row lives inside the Backpack window itself, just below the "Backpack" title and above the item grid. It only appears while your bags are open, and disappears again when you close them — it never floats around on its own or covers other UI elements like action bars or cast bars.
-Slash commands
-Command	Effect
-`/zsort`	Merge stacks and compact all bags
-`/zsell`	Sell all grey items (merchant window must be open)
-`/zbagsall`	Open/close all bags (same as Shift+B)
-`/zbagdebug`	Prints diagnostic info about the container API and current bag contents — useful for troubleshooting on servers with a non-standard `C_Container` implementation
-Installation
-Download `ZBagTools.lua` and `ZBagTools.toc`.
-Put both files into `Interface/AddOns/ZBagTools/` (create the folder if it doesn't exist).
-Fully log out/in (not just `/reload`) so the addon loads cleanly.
-Notes
-This addon was built and tested against Grimfall's custom `C_Container` API, which doesn't always reliably return item quality/count/lock data through `GetContainerItemInfo`. To work around that, item identity and quality (grey/not grey) are read directly from the item's hyperlink instead of relying on that API, so the addon should behave consistently even on servers where those fields are unreliable or missing.
+# ZBagTools
+
+A lightweight bag-management addon for WotLK 3.3.5a, built for the Grimfall private server. It adds smart bag sorting, one-click grey selling and three bag modes — including a combined, Bagnon-style bag window — on top of the default bag UI.
+
+## Features
+
+### Bag modes (`Bag` / `All` / `Box` button, `B` key)
+
+The mode button cycles through three modes. The `B` key (and the Backpack icon on the bag bar) always opens the current mode, so the button doubles as a setting that is remembered between sessions (account-wide).
+
+| Mode | What `B` opens |
+|------|----------------|
+| `Bag` | The Backpack only (default WoW behavior) |
+| `All` | All bags, each in its own window |
+| `Box` | All bags combined into one window |
+
+- Clicking the button switches to the next mode right away: it closes whatever is open and opens the new mode's view.
+- `Shift+B` keeps the default behavior: all bags in separate windows.
+- Clicking a single bag icon (bags 1-4) on the bag bar still opens just that bag.
+- At a merchant, the bank or the mailbox your bags open in the current mode, and close again when you leave.
+
+### Combined bag window (`Box` mode)
+
+- All slots of the Backpack and bags 1-4 in one movable window (position is saved, `Esc` closes it).
+- Items are laid out in the same order Sort uses (Backpack first, then bags 1-4), so after sorting your items form one continuous block.
+- Uses the default item buttons: using, dragging, splitting, selling at a merchant and tooltips all work as usual.
+- Item quality borders, cooldowns, locked items shown greyed out.
+- Search box: items that don't match fade out.
+- Bag bar at the bottom: swap bags by dragging; hovering a bag icon highlights that bag's items.
+- Free slot counter and your money.
+- Adjustable columns and scale (see slash commands).
+
+### Sort (`Sort` button / `/zsort`)
+
+Cleans up your bags in one click, across the Backpack and bags 1-4, in three phases:
+
+1. **Merge partial stacks.** The back-most partial stack fills the front-most one. If only part of it fits, exactly that amount is split off, so nothing is left on the cursor. Stacks in a special bag (herb, enchanting, gem, mining, soul, quiver, ammo pouch...) are always the preferred target.
+2. **Move special items into their bags.** Herbs go into the herb bag, soul shards into the soul bag, arrows into the quiver, and so on — as long as there is free room there.
+3. **Fill the gaps.** Bags are processed right to left as on the default bag bar (Backpack first), and within a bag from the top-left slot to the bottom-right one. The last item is moved into the first empty slot until the two meet. Special bag slots only receive items that fit them, and items are never pulled out of a special bag into a normal one.
+
+Locked slots are skipped. Before every pass Sort waits for the server to confirm the previous moves, so you only need to press it once.
+
+### Sell Grey (`Sell` button / `/zsell`)
+
+Sells every grey (poor quality) item in your bags in one click. The button is only active while a merchant window is open.
+
+### Close all bags (`X` button)
+
+Closes every open bag window, including the combined window.
+
+## Where the buttons are
+
+The button row (`Sell` `Sort` `Bag/All/Box` `X`) lives inside the Backpack window, just below the "Backpack" title, and in the header of the combined window. It only appears while those windows are open.
+
+## Slash commands
+
+| Command | Effect |
+|---------|--------|
+| `/zbag` | Lists the options |
+| `/zbag mode bag\|all\|box` | Sets the bag mode (same as the mode button) |
+| `/zbag cols <4-24>` | Number of columns in the combined window (default 10) |
+| `/zbag scale <0.5-2>` | Scale of the combined window |
+| `/zbag reset` | Resets the combined window's position, scale and columns |
+| `/zsort` | Sort your bags |
+| `/zsell` | Sell all grey items (merchant window must be open) |
+| `/zbagsall` | Open/close all bags in separate windows (same as Shift+B) |
+| `/zbagdebug` | Prints the current mode and diagnostic info about the container API and bag contents |
+
+## Installation
+
+1. Download `ZBagTools.lua` and `ZBagTools.toc`.
+2. Put both files into `Interface/AddOns/ZBagTools/` (create the folder if it doesn't exist).
+3. Fully log out and back in (not just `/reload`) so the addon and its saved settings load cleanly. This is also needed when updating from an older version, because the saved settings moved to `ZBagToolsDB`.
+
+## Notes
+
+- Built and tested against Grimfall's custom `C_Container` API, which doesn't always reliably return item quality/count/lock data through `GetContainerItemInfo`. Sell and Sort therefore read item identity and quality directly from the item's hyperlink.
+- Other bag addons that replace the default bag windows may conflict with the `All`/`Box` modes.
