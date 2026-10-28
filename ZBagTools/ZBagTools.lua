@@ -562,13 +562,16 @@ combined:SetClampedToScreen(true)
 combined:EnableMouse(true)
 combined:SetMovable(true)
 combined:RegisterForDrag("LeftButton")
+-- tomor (egyszinu) hatter: a gyari DialogBox hatter maga is attetszo, igy
+-- 100%-on sem takart rendesen. Az atlatszosagot a BackdropColor alfaja adja.
 combined:SetBackdrop({
-	bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+	bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
 	edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-	tile = true, tileSize = 16, edgeSize = 16,
+	tile = false, edgeSize = 16,
 	insets = {left = 4, right = 4, top = 4, bottom = 4},
 })
-combined:SetBackdropColor(0, 0, 0, 0.9)
+local BG_R, BG_G, BG_B = 0.06, 0.06, 0.06
+combined:SetBackdropColor(BG_R, BG_G, BG_B, 0.9)
 combined:SetWidth(MIN_WIDTH)
 combined:SetHeight(200)
 tinsert(UISpecialFrames, "ZBagToolsCombined")   -- Esc bezarja
@@ -591,7 +594,7 @@ local function RestorePosition()
 		combined:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -60, 100)
 	end
 	combined:SetScale(DB().scale or 1)
-	combined:SetBackdropColor(0, 0, 0, DB().bgAlpha or 0.9)
+	combined:SetBackdropColor(BG_R, BG_G, BG_B, DB().bgAlpha or 0.9)
 end
 
 local title = combined:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1476,7 +1479,7 @@ OptSlider("scale", -320, 50, 200, 10, "Scale: %d%%",
 OptSlider("bgAlpha", -362, 20, 100, 5, "Background opacity: %d%%",
 	function(v) return math.floor((v or 0.9) * 100 + 0.5) end,
 	function(v) return v / 100 end,
-	function() combined:SetBackdropColor(0, 0, 0, DB().bgAlpha) end)
+	function() combined:SetBackdropColor(BG_R, BG_G, BG_B, DB().bgAlpha) end)
 
 local resetBtn = CreateFrame("Button", "ZBagToolsOptReset", opt, "UIPanelButtonTemplate")
 resetBtn:SetWidth(130)
@@ -1520,6 +1523,7 @@ optBtn:SetScript("OnClick", function()
 	if combined.optionsMode then
 		-- vissza a mentett mod nezetere
 		if Mode() == "box" then
+			CallOrig("CloseAllBags")   -- kulon zsakok ne maradjanak nyitva a Box mellett
 			SetOptionsView(false)
 		else
 			combined:Hide()
@@ -1531,6 +1535,9 @@ optBtn:SetScript("OnClick", function()
 end)
 
 OpenOptions = function()
+	-- a kulon zsakablakokat bezarjuk (pl. a fogaskereket a Backpack-bol
+	-- nyomtad); a <- Back utana a mentett mod nezetet nyitja vissza
+	CallOrig("CloseAllBags")
 	if not combined:IsShown() then
 		combined:Show()
 	end
