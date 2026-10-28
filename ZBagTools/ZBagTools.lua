@@ -96,7 +96,16 @@ end
 -- Beallitasok (account szintu SavedVariables)
 ----------------------------------------------------------------
 
-local DEFAULTS = {mode = "bag", cols = 10, scale = 1, autoSell = false}
+local DEFAULTS = {
+	mode = "bag", cols = 10, scale = 1,
+	autoSell = false, sortAfterSell = true, sellReport = true,
+	autoRepair = false, repairGuild = true,
+	lowWarn = true, lowThreshold = 3,
+	bgAlpha = 0.9,
+}
+
+-- kesobb definialt fuggvenyek (az opcios nezethez)
+local RefreshOptions, OpenOptions
 local MODES = {"bag", "all", "box"}
 local MODE_LABEL = {bag = "Bag", all = "All", box = "Box"}
 local MODE_DESC = {
@@ -124,6 +133,22 @@ local function NextMode(m)
 		end
 	end
 	return "bag"
+end
+
+-- penz kiirasa arany/ezust/rez ikonokkal (chatben es a Box ablakban is)
+local function FormatMoney(m)
+	local g = math.floor(m / 10000)
+	local s = math.floor((m % 10000) / 100)
+	local c = m % 100
+	local gi = "|TInterface\\MoneyFrame\\UI-GoldIcon:12:12:2:0|t"
+	local si = "|TInterface\\MoneyFrame\\UI-SilverIcon:12:12:2:0|t"
+	local ci = "|TInterface\\MoneyFrame\\UI-CopperIcon:12:12:2:0|t"
+	if g > 0 then
+		return string.format("%d%s %d%s %d%s", g, gi, s, si, c, ci)
+	elseif s > 0 then
+		return string.format("%d%s %d%s", s, si, c, ci)
+	end
+	return string.format("%d%s", c, ci)
 end
 
 ----------------------------------------------------------------
@@ -157,18 +182,26 @@ local function SellGrey(auto)
 		return {}
 	end
 	local soldSlots = {}
+	local earned = 0
 	for _, bag in ipairs(BAGS) do
 		local slots = NumSlots(bag)
 		for slot = 1, slots do
 			local link = GetLink(bag, slot)
 			if link and IsGrey(link, nil) then
+				local _, count = SlotInfo(bag, slot)
+				local price = select(11, GetItemInfo(link)) or 0
+				earned = earned + price * (count or 1)
 				UseSlot(bag, slot)
 				table.insert(soldSlots, {bag = bag, slot = slot, link = link})
 			end
 		end
 	end
 	if #soldSlots > 0 then
-		p((auto and "Auto-sold " or "Sold ") .. #soldSlots .. " grey item(s).")
+		local msg = (auto and "Auto-sold " or "Sold ") .. #soldSlots .. " grey item(s)"
+		if DB().sellReport and earned > 0 then
+			msg = msg .. " for " .. FormatMoney(earned)
+		end
+		p(msg .. ".")
 	elseif not auto then
 		p("No grey items to sell in your bags.")
 	end
@@ -517,6 +550,9 @@ local PAD = 8
 local GRID_TOP = 58
 local FOOTER = 38
 local MIN_WIDTH = 300
+local OPT_WIDTH = 340
+local OPT_TOP = 32      -- opcios nezetben nincs gombsor/kereso, feljebb kezdodik
+local OPT_HEIGHT = OPT_TOP + 414 + FOOTER
 
 local combined = CreateFrame("Frame", "ZBagToolsCombined", UIParent)
 combined:Hide()
@@ -555,6 +591,7 @@ local function RestorePosition()
 		combined:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -60, 100)
 	end
 	combined:SetScale(DB().scale or 1)
+	combined:SetBackdropColor(0, 0, 0, DB().bgAlpha or 0.9)
 end
 
 local title = combined:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -649,21 +686,6 @@ local function UpdateButton(b, bag, slot)
 	b:SetAlpha(alpha)
 end
 
-local function FormatMoney(m)
-	local g = math.floor(m / 10000)
-	local s = math.floor((m % 10000) / 100)
-	local c = m % 100
-	local gi = "|TInterface\\MoneyFrame\\UI-GoldIcon:12:12:2:0|t"
-	local si = "|TInterface\\MoneyFrame\\UI-SilverIcon:12:12:2:0|t"
-	local ci = "|TInterface\\MoneyFrame\\UI-CopperIcon:12:12:2:0|t"
-	if g > 0 then
-		return string.format("%d%s %d%s %d%s", g, gi, s, si, c, ci)
-	elseif s > 0 then
-		return string.format("%d%s %d%s", s, si, c, ci)
-	end
-	return string.format("%d%s", c, ci)
-end
-
 -- tasksor: az 1-4. zsak helye (csere: ra kell huzni a zsakot / felvenni)
 local bagBar = {}
 local BAGBAR_SIZE = 24
@@ -738,8 +760,13 @@ local function Layout()
 	end
 	local rows = math.max(1, math.ceil(index / cols))
 	local width = math.max(MIN_WIDTH, PAD * 2 + cols * SLOT_SIZE + (cols - 1) * SLOT_GAP)
-	combined:SetWidth(width)
-	combined:SetHeight(GRID_TOP + rows * SLOT_SIZE + (rows - 1) * SLOT_GAP + FOOTER)
+	if combined.optionsMode then
+		combined:SetWidth(math.max(width, OPT_WIDTH))
+		combined:SetHeight(OPT_HEIGHT)
+	else
+		combined:SetWidth(width)
+		combined:SetHeight(GRID_TOP + rows * SLOT_SIZE + (rows - 1) * SLOT_GAP + FOOTER)
+	end
 end
 
 local function SizesChanged()
@@ -751,6 +778,59 @@ local function SizesChanged()
 	return false
 end
 
+----------------------------------------------------------------
+-- Szabad hely / teli zsak jelzes
+-- Csak a normal zsakok szabad helyei szamitanak (a specialis zsakba nem
+-- fer barmi); a specialis szabad helyek zarojelben latszanak.
+-- Ha keves a hely: a szamlalo es a tasksor ikonjai (a gyari Backpack ikon
+-- is) pirosra valtanak, es egyszer szol a chatben, amikor ala esik.
+----------------------------------------------------------------
+
+local lowState = nil
+
+local function CheckLowSpace(fromEvent)
+	local free, total, special = 0, 0, 0
+	for _, bag in ipairs(BAGS) do
+		local n = NumSlots(bag) or 0
+		local f, bagType = FreeSlots(bag)
+		if bagType == 0 then
+			free = free + f
+			total = total + n
+		else
+			special = special + f
+		end
+	end
+	local low = DB().lowWarn and free <= (DB().lowThreshold or 3) and total > 0
+
+	local text = string.format("Free: %d / %d", free, total)
+	if special > 0 then
+		text = text .. string.format(" (+%d)", special)
+	end
+	freeText:SetText(text)
+	if low then
+		freeText:SetTextColor(1, 0.25, 0.25)
+	else
+		freeText:SetTextColor(1, 1, 1)
+	end
+	local r, g, b = 1, 1, 1
+	if low then
+		r, g, b = 1, 0.35, 0.35
+	end
+	for bag = 1, 4 do
+		bagBar[bag].icon:SetVertexColor(r, g, b)
+	end
+	if MainMenuBarBackpackButtonIconTexture then
+		MainMenuBarBackpackButtonIconTexture:SetVertexColor(r, g, b)
+	end
+
+	if fromEvent then
+		if low and lowState == false then
+			p("Bags almost full: " .. free .. " free slot(s) left.")
+		end
+		lowState = low
+	end
+end
+
 local function RefreshCombined()
 	if not combined:IsShown() then
 		return
@@ -758,18 +838,32 @@ local function RefreshCombined()
 	if SizesChanged() then
 		Layout()
 	end
-	local free, total = 0, 0
-	for _, bag in ipairs(BAGS) do
-		local n = NumSlots(bag) or 0
-		total = total + n
-		free = free + (FreeSlots(bag))
-		for slot = 1, n do
-			UpdateButton(buttons[bag][slot], bag, slot)
+	if not combined.optionsMode then
+		for _, bag in ipairs(BAGS) do
+			local n = NumSlots(bag) or 0
+			for slot = 1, n do
+				UpdateButton(buttons[bag][slot], bag, slot)
+			end
 		end
 	end
-	freeText:SetText(string.format("Free: %d / %d", free, total))
 	moneyText:SetText(FormatMoney(GetMoney()))
 	UpdateBagBar()
+	CheckLowSpace(false)
+end
+
+-- teli zsak figyeles: Box ablaktol fuggetlenul, kepkockankent egyszer
+local lowCheckPending = false
+local lowChecker = CreateFrame("Frame")
+local function RequestLowCheck()
+	if lowCheckPending then
+		return
+	end
+	lowCheckPending = true
+	lowChecker:SetScript("OnUpdate", function(self)
+		self:SetScript("OnUpdate", nil)
+		lowCheckPending = false
+		CheckLowSpace(true)
+	end)
 end
 combined.Refresh = RefreshCombined
 
@@ -794,6 +888,9 @@ combined:SetScript("OnShow", function()
 end)
 combined:SetScript("OnHide", function()
 	hoverBag = nil
+	if combined.optionsMode and combined.SetOptionsView then
+		combined.SetOptionsView(false)
+	end
 	if ZBagToolsSearch then
 		ZBagToolsSearch:ClearFocus()
 	end
@@ -937,7 +1034,7 @@ end
 
 local function SellAndSort(auto)
 	local soldSlots = SellGrey(auto)
-	if #soldSlots == 0 then
+	if #soldSlots == 0 or not DB().sortAfterSell then
 		return
 	end
 	local waited = 0
@@ -949,6 +1046,60 @@ local function SellAndSort(auto)
 		if SoldItemsGone(soldSlots) or waited > SELL_SORT_TIMEOUT then
 			self:SetScript("OnUpdate", nil)
 			StartSort(true)
+		end
+	end)
+end
+
+----------------------------------------------------------------
+-- Auto javitas kereskedonel
+-- Ha be van allitva, elobb a guild bankbol probal fizetni; ha az nem
+-- sikerult (nincs jog / keret / penz), sajat penzbol javit.
+----------------------------------------------------------------
+
+local repairCheck = CreateFrame("Frame")
+
+local function RepairOwn(cost)
+	if GetMoney() >= cost then
+		RepairAllItems()
+		p("Repaired for " .. FormatMoney(cost) .. ".")
+	else
+		p("Not enough money to repair (" .. FormatMoney(cost) .. " needed).")
+	end
+end
+
+local function AutoRepair()
+	if not DB().autoRepair then
+		return
+	end
+	if not (CanMerchantRepair and CanMerchantRepair()) then
+		return
+	end
+	local cost, canRepair = GetRepairAllCost()
+	if not canRepair or not cost or cost <= 0 then
+		return
+	end
+	local useGuild = DB().repairGuild and IsInGuild and IsInGuild()
+		and CanGuildBankRepair and CanGuildBankRepair()
+	if not useGuild then
+		RepairOwn(cost)
+		return
+	end
+	RepairAllItems(1)
+	local waited = 0
+	repairCheck:SetScript("OnUpdate", function(self, elapsed)
+		waited = waited + elapsed
+		if waited < 0.5 then
+			return
+		end
+		self:SetScript("OnUpdate", nil)
+		if not atMerchant then
+			return
+		end
+		local left = GetRepairAllCost()
+		if left and left > 0 then
+			RepairOwn(left)
+		else
+			p("Repaired for " .. FormatMoney(cost) .. " (guild bank).")
 		end
 	end)
 end
@@ -1011,6 +1162,11 @@ local function SellTooltip(self)
 	else
 		GameTooltip:AddLine("Auto sell: OFF", 1, 1, 1)
 	end
+	if DB().autoRepair then
+		GameTooltip:AddLine("Auto repair: ON" .. (DB().repairGuild and " (guild bank first)" or ""), 0.2, 1, 0.2, true)
+	else
+		GameTooltip:AddLine("Auto repair: OFF", 1, 1, 1)
+	end
 	if atMerchant then
 		GameTooltip:AddLine("Left-click: sell now (then Sort)", 0.6, 0.8, 1)
 	else
@@ -1025,6 +1181,9 @@ local function SetAutoSell(on)
 		ZBagToolsDB.autoSell = on and true or false
 	end
 	UpdateSellButtons()
+	if RefreshOptions then
+		RefreshOptions()
+	end
 end
 
 local function SellClick(self, button)
@@ -1141,12 +1300,39 @@ end
 local bpBar = CreateToolbar("ZBagToolsFrame", ContainerFrame1)
 bpBar:Hide()
 
+-- fogaskerek a Backpack ablak ermesoranak bal szelen -> opciok.
+-- A segedkeret bal szele a Backpack ablak bal szelehez, also szele az
+-- ermesor aljahoz igazodik, igy a fogaskerek az ermekkel egy sorban all.
+local gearAnchor = CreateFrame("Frame", nil, bpBar)
+local gear = CreateFrame("Button", "ZBagToolsGear", bpBar)
+gear:SetWidth(16)
+gear:SetHeight(16)
+-- a jatek sajat arany fogaskerek kurzora (INTERACT_CURSOR), gyari fajl
+gear:SetNormalTexture("Interface\\Cursor\\Interact")
+gear:SetHighlightTexture("Interface\\Cursor\\Interact", "ADD")
+gear:SetScript("OnClick", function()
+	if OpenOptions then OpenOptions() end
+end)
+SimpleTooltip(gear, "ZBagTools options")
+
 local function AttachBackpackBar(frame)
 	bpBar:SetParent(frame)
 	bpBar:ClearAllPoints()
 	bpBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 47, -28)
 	bpBar:SetFrameLevel(frame:GetFrameLevel() + 5)
 	bpBar:Show()
+
+	local money = _G[frame:GetName() .. "MoneyFrame"]
+	gearAnchor:ClearAllPoints()
+	if money then
+		gearAnchor:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, 0)
+		gearAnchor:SetPoint("BOTTOM", money, "BOTTOM", 0, 0)
+	else
+		gearAnchor:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, 0)
+		gearAnchor:SetPoint("BOTTOM", frame, "BOTTOM", 0, 10)
+	end
+	gear:ClearAllPoints()
+	gear:SetPoint("BOTTOMLEFT", gearAnchor, "BOTTOMLEFT", 0, -1)
 end
 
 hooksecurefunc("ContainerFrame_GenerateFrame", function(frame, size, id)
@@ -1183,6 +1369,175 @@ end)
 search:SetScript("OnLeave", GameTooltip_Hide)
 
 ----------------------------------------------------------------
+-- Opcios nezet: a Box ablakban az item racs helyen jelenik meg.
+-- "Options" gomb a fejlecben (Box nezetben), "<- Back" vissza a mentett
+-- mod nezetere. Mashonnan: fogaskerek a Backpack ablakban, vagy /zbag.
+----------------------------------------------------------------
+
+local optBtn = CreateFrame("Button", "ZBagToolsOptionsButton", combined, "UIPanelButtonTemplate")
+optBtn:SetWidth(70)
+optBtn:SetHeight(18)
+optBtn:SetPoint("RIGHT", closeBtn, "LEFT", 0, 0)
+optBtn:SetText("Options")
+
+local opt = CreateFrame("Frame", "ZBagToolsOptions", combined)
+opt:SetPoint("TOPLEFT", combined, "TOPLEFT", PAD + 4, -OPT_TOP)
+opt:SetPoint("BOTTOMRIGHT", combined, "BOTTOMRIGHT", -PAD - 4, FOOTER)
+opt:Hide()
+
+local optWidgets = {}
+
+local function OptHeader(text, y)
+	local fs = opt:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	fs:SetPoint("TOPLEFT", opt, "TOPLEFT", 0, y)
+	fs:SetText(text)
+end
+
+local function OptCheck(key, label, y, indent, onChange)
+	local name = "ZBagToolsOpt_" .. key
+	local cb = CreateFrame("CheckButton", name, opt, "OptionsCheckButtonTemplate")
+	cb:SetPoint("TOPLEFT", opt, "TOPLEFT", indent or 0, y)
+	_G[name .. "Text"]:SetText(label)
+	cb:SetScript("OnClick", function(self)
+		ZBagToolsDB[key] = self:GetChecked() and true or false
+		if onChange then onChange() end
+	end)
+	cb.zbKey = key
+	table.insert(optWidgets, cb)
+	return cb
+end
+
+-- toUI/fromUI: atvaltas a tarolt ertek es a csuszka erteke kozott (pl. scale %)
+local function OptSlider(key, y, minV, maxV, step, fmt, toUI, fromUI, onChange)
+	local name = "ZBagToolsOpt_" .. key
+	local sl = CreateFrame("Slider", name, opt, "OptionsSliderTemplate")
+	sl:SetPoint("TOPLEFT", opt, "TOPLEFT", 6, y)
+	sl:SetWidth(220)
+	sl:SetMinMaxValues(minV, maxV)
+	sl:SetValueStep(step)
+	local lim = fmt:find("%%%%") and "%d%%" or "%d"
+	_G[name .. "Low"]:SetText(string.format(lim, minV))
+	_G[name .. "High"]:SetText(string.format(lim, maxV))
+	sl:SetScript("OnValueChanged", function(self, value)
+		value = math.floor(value / step + 0.5) * step
+		_G[name .. "Text"]:SetText(string.format(fmt, value))
+		if self.zbUpdating then return end
+		ZBagToolsDB[key] = fromUI and fromUI(value) or value
+		if onChange then onChange() end
+	end)
+	sl.zbKey = key
+	sl.zbToUI = toUI
+	sl.zbFmt = fmt
+	sl.zbName = name
+	sl.zbIsSlider = true
+	table.insert(optWidgets, sl)
+	return sl
+end
+
+RefreshOptions = function()
+	if not opt:IsShown() then
+		return
+	end
+	local db = DB()
+	for _, w in ipairs(optWidgets) do
+		if w.zbIsSlider then
+			local v = db[w.zbKey]
+			if w.zbToUI then v = w.zbToUI(v) end
+			w.zbUpdating = true
+			w:SetValue(v)
+			w.zbUpdating = false
+			_G[w.zbName .. "Text"]:SetText(string.format(w.zbFmt, v))
+		else
+			w:SetChecked(db[w.zbKey] and true or false)
+		end
+	end
+end
+
+-- Vendor
+OptHeader("Vendor", 0)
+OptCheck("autoSell", "Auto sell grey items at vendors", -16, 0, UpdateSellButtons)
+OptCheck("sortAfterSell", "Sort bags after selling", -40)
+OptCheck("sellReport", "Show earnings in chat", -64)
+OptCheck("autoRepair", "Auto repair at vendors", -88)
+OptCheck("repairGuild", "Use guild bank funds first (experimental)", -112, 20)
+
+-- Bag space
+OptHeader("Bag space", -146)
+OptCheck("lowWarn", "Warn when bags are almost full", -162, 0, function() CheckLowSpace(false) end)
+OptSlider("lowThreshold", -206, 1, 20, 1, "Warn at %d free slots or less", nil, nil, function() CheckLowSpace(false) end)
+
+-- Box window
+OptHeader("Box window", -244)
+OptSlider("cols", -278, 4, 24, 1, "Columns: %d", nil, nil, function() Layout() end)
+OptSlider("scale", -320, 50, 200, 10, "Scale: %d%%",
+	function(v) return math.floor((v or 1) * 100 + 0.5) end,
+	function(v) return v / 100 end,
+	function() combined:SetScale(DB().scale) end)
+OptSlider("bgAlpha", -362, 20, 100, 5, "Background opacity: %d%%",
+	function(v) return math.floor((v or 0.9) * 100 + 0.5) end,
+	function(v) return v / 100 end,
+	function() combined:SetBackdropColor(0, 0, 0, DB().bgAlpha) end)
+
+local resetBtn = CreateFrame("Button", "ZBagToolsOptReset", opt, "UIPanelButtonTemplate")
+resetBtn:SetWidth(130)
+resetBtn:SetHeight(20)
+resetBtn:SetPoint("TOPLEFT", opt, "TOPLEFT", 4, -392)
+resetBtn:SetText("Reset window")
+resetBtn:SetScript("OnClick", function()
+	ZBagToolsDB.point = nil
+	ZBagToolsDB.scale = 1
+	ZBagToolsDB.cols = DEFAULTS.cols
+	ZBagToolsDB.bgAlpha = DEFAULTS.bgAlpha
+	RestorePosition()
+	Layout()
+	RefreshOptions()
+end)
+SimpleTooltip(resetBtn, "Reset the Box window's position, scale, columns and opacity")
+
+local function SetOptionsView(on)
+	combined.optionsMode = on and true or false
+	for _, h in pairs(holders) do
+		if on then h:Hide() else h:Show() end
+	end
+	if on then
+		search:Hide()
+		boxBar:Hide()       -- a gyors gombsor itt felesleges
+		opt:Show()
+		optBtn:SetText("<- Back")
+		RefreshOptions()
+	else
+		search:Show()
+		boxBar:Show()
+		opt:Hide()
+		optBtn:SetText("Options")
+	end
+	Layout()
+	RefreshCombined()
+end
+combined.SetOptionsView = SetOptionsView
+
+optBtn:SetScript("OnClick", function()
+	if combined.optionsMode then
+		-- vissza a mentett mod nezetere
+		if Mode() == "box" then
+			SetOptionsView(false)
+		else
+			combined:Hide()
+			OpenModeView()
+		end
+	else
+		SetOptionsView(true)
+	end
+end)
+
+OpenOptions = function()
+	if not combined:IsShown() then
+		combined:Show()
+	end
+	SetOptionsView(true)
+end
+
+----------------------------------------------------------------
 -- Esemenyek
 ----------------------------------------------------------------
 
@@ -1193,6 +1548,7 @@ events:RegisterEvent("ITEM_LOCK_CHANGED")
 events:RegisterEvent("BAG_UPDATE_COOLDOWN")
 events:RegisterEvent("PLAYER_MONEY")
 events:RegisterEvent("UNIT_INVENTORY_CHANGED")
+events:RegisterEvent("PLAYER_ENTERING_WORLD")
 -- kereskedo / bank / posta: a nyitast-zarast az esemenyek vezerlik,
 -- igy nem fuggunk attol, melyik gyari nyito fuggvenyt hivja a kliens
 events:RegisterEvent("MERCHANT_SHOW")
@@ -1218,6 +1574,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
 		atMerchant = true
 		UpdateSellButtons()
 		OpenModeView()
+		AutoRepair()
 		ScheduleAutoSell()
 	elseif event == "MERCHANT_CLOSED" then
 		if atMerchant then
@@ -1229,7 +1586,12 @@ events:SetScript("OnEvent", function(self, event, arg1)
 		OpenModeView()
 	elseif event == "BANKFRAME_CLOSED" or event == "MAIL_CLOSED" then
 		CloseAll()
+	elseif event == "PLAYER_ENTERING_WORLD" then
+		CheckLowSpace(true)
 	else
+		if event == "BAG_UPDATE" then
+			RequestLowCheck()
+		end
 		RequestRefresh()
 	end
 end)
@@ -1274,12 +1636,14 @@ SlashCmdList["ZBAG"] = function(msg)
 		if n < 4 then n = 4 elseif n > 24 then n = 24 end
 		ZBagToolsDB.cols = n
 		if combined:IsShown() then Layout() RefreshCombined() end
+		RefreshOptions()
 		p("Box columns: " .. n)
 	elseif cmd == "scale" and tonumber(arg) then
 		local s = tonumber(arg)
 		if s < 0.5 then s = 0.5 elseif s > 2 then s = 2 end
 		ZBagToolsDB.scale = s
 		combined:SetScale(s)
+		RefreshOptions()
 		p("Box scale: " .. s)
 	elseif cmd == "reset" then
 		ZBagToolsDB.point = nil
@@ -1287,9 +1651,12 @@ SlashCmdList["ZBAG"] = function(msg)
 		ZBagToolsDB.cols = DEFAULTS.cols
 		RestorePosition()
 		if combined:IsShown() then Layout() RefreshCombined() end
+		RefreshOptions()
 		p("Box window position, scale and columns reset.")
+	elseif cmd == "" or cmd == "options" then
+		OpenOptions()
 	else
-		p("Commands:")
+		p("Commands (/zbag alone opens the options):")
 		p("  /zbag mode bag|all|box - bag mode (same as the Bag/All/Box button)")
 		p("  /zbag autosell [on|off] - sell greys automatically at vendors (now " .. (DB().autoSell and "on" or "off") .. ")")
 		p("  /zbag cols <4-24> - columns in the Box window (now " .. tostring(DB().cols) .. ")")
@@ -1316,4 +1683,4 @@ SlashCmdList["ZBAGDEBUG"] = function()
 	end
 end
 
-p("loaded. B opens the current bag mode (Bag/All/Box button), Shift+B all bags. /zbag for options.")
+p("loaded. B opens the current bag mode (Bag/All/Box button), Shift+B all bags. /zbag opens the options, /zbag help lists the commands.")

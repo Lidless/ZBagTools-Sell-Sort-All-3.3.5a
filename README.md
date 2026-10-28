@@ -28,7 +28,7 @@ The mode button cycles through three modes. The `B` key (and the Backpack icon o
 - Search box: items that don't match fade out.
 - Bag bar at the bottom: swap bags by dragging; hovering a bag icon highlights that bag's items.
 - Free slot counter and your money.
-- Adjustable columns and scale (see slash commands).
+- Adjustable columns, scale and background opacity (see Options).
 
 ### Sort (`Sort` button / `/zsort`)
 
@@ -46,20 +46,40 @@ Sells every grey (poor quality) item in your bags in one click. Left-click only 
 
 - **Auto sell:** right-click the `Sell` button (or use `/zbag autosell`) to toggle it. While it's on, the button has a green border and your greys are sold automatically a moment after you open a vendor. The setting is saved account-wide.
 - **Sort after selling:** whenever something was actually sold (manually or automatically), Sort runs by itself once the sold items have left your bags. After a sale it only reports in chat if it actually moved something.
+- **Earnings:** the chat message shows how much the greys sold for, e.g. `Sold 7 grey item(s) for 1g 23s 40c.`
+
+### Auto repair (Options)
+
+When enabled, your gear is repaired automatically whenever you open a vendor that can repair. With "Use guild bank funds first (experimental)" it tries the guild bank first and falls back to your own money if the guild bank didn't pay. If you can't afford the repair, it tells you how much is needed.
+
+### Low bag space warning (Options)
+
+When the free slots in your normal bags drop to the threshold (default 3) or below, the free slot counter and the bag icons (including the default Backpack icon) turn red, and a one-time chat message warns you. Free slots in special bags don't count, since not every item fits there; they are shown in brackets, e.g. `Free: 3 / 64 (+12)`.
 
 ### Close all bags (`X` button)
 
 Closes every open bag window, including the combined window.
 
+### Options
+
+All settings in one place, shown inside the combined window in place of the item grid:
+
+- **Vendor:** auto sell, sort after selling, show earnings, auto repair, use guild bank funds first (experimental)
+- **Bag space:** low space warning and its threshold
+- **Box window:** columns, scale, background opacity, reset window
+
+Open it with the `Options` button in the combined window's header, the small gold gear at the bottom-left of the Backpack window (next to your money), or `/zbag`. `<- Back` returns to your current bag mode's view. Settings are saved account-wide.
+
 ## Where the buttons are
 
-The button row (`Sell` `Sort` `Bag/All/Box` `X`) lives inside the Backpack window, just below the "Backpack" title, and in the header of the combined window. It only appears while those windows are open.
+The button row (`Sell` `Sort` `Bag/All/Box` `X`) lives inside the Backpack window, just below the "Backpack" title, and in the header of the combined window. It only appears while those windows are open. The options gear sits in the Backpack window's money row, and the `Options` button in the combined window's header.
 
 ## Slash commands
 
 | Command | Effect |
 |---------|--------|
-| `/zbag` | Lists the options |
+| `/zbag` | Opens the options |
+| `/zbag help` | Lists the slash commands |
 | `/zbag mode bag\|all\|box` | Sets the bag mode (same as the mode button) |
 | `/zbag autosell [on\|off]` | Toggles automatic grey selling at vendors (same as right-clicking `Sell`) |
 | `/zbag cols <4-24>` | Number of columns in the combined window (default 10) |
