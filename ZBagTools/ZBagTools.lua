@@ -547,9 +547,11 @@ end
 local SLOT_SIZE = 37
 local SLOT_GAP = 4
 local PAD = 8
-local GRID_TOP = 58
+local GRID_TOP_WIDE = 36     -- egysoros fejlec: cim + gombsor + kereso + Options + X
+local GRID_TOP_NARROW = 62   -- keskeny ablak: a kereso a gombsor alatt, kulon sorban
+local HEADER_WIDE_MIN = 410  -- ennyi szelessegtol fer el minden egy sorban
 local FOOTER = 38
-local MIN_WIDTH = 300
+local MIN_WIDTH = 320
 local OPT_WIDTH = 340
 local OPT_TOP = 32      -- opcios nezetben nincs gombsor/kereso, feljebb kezdodik
 local OPT_HEIGHT = OPT_TOP + 414 + FOOTER
@@ -598,7 +600,7 @@ local function RestorePosition()
 end
 
 local title = combined:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-title:SetPoint("TOPLEFT", combined, "TOPLEFT", 12, -10)
+title:SetPoint("LEFT", combined, "TOPLEFT", 12, -18)
 title:SetText("ZBag")
 
 local closeBtn = CreateFrame("Button", "ZBagToolsCombinedClose", combined, "UIPanelCloseButton")
@@ -742,8 +744,14 @@ freeText:SetPoint("LEFT", bagBar[4], "RIGHT", 8, 0)
 
 local lastSizes = {}
 
+-- a fejlec elrendezese a szelesseg alapjan (kesobb definialjuk, amikor
+-- a gombsor, a kereso es az Options gomb mar letezik); a racs tetejet adja
+local ApplyHeader
+
 local function Layout()
 	local cols = DB().cols or DEFAULTS.cols
+	local width = math.max(MIN_WIDTH, PAD * 2 + cols * SLOT_SIZE + (cols - 1) * SLOT_GAP)
+	local gridTop = ApplyHeader and ApplyHeader(width) or GRID_TOP_NARROW
 	local index = 0
 	for _, bag in ipairs(BAGS) do
 		local n = NumSlots(bag) or 0
@@ -753,7 +761,7 @@ local function Layout()
 			local col = index % cols
 			local row = math.floor(index / cols)
 			b:ClearAllPoints()
-			b:SetPoint("TOPLEFT", combined, "TOPLEFT", PAD + col * (SLOT_SIZE + SLOT_GAP), -GRID_TOP - row * (SLOT_SIZE + SLOT_GAP))
+			b:SetPoint("TOPLEFT", combined, "TOPLEFT", PAD + col * (SLOT_SIZE + SLOT_GAP), -gridTop - row * (SLOT_SIZE + SLOT_GAP))
 			b:Show()
 			index = index + 1
 		end
@@ -762,13 +770,12 @@ local function Layout()
 		end
 	end
 	local rows = math.max(1, math.ceil(index / cols))
-	local width = math.max(MIN_WIDTH, PAD * 2 + cols * SLOT_SIZE + (cols - 1) * SLOT_GAP)
 	if combined.optionsMode then
 		combined:SetWidth(math.max(width, OPT_WIDTH))
 		combined:SetHeight(OPT_HEIGHT)
 	else
 		combined:SetWidth(width)
-		combined:SetHeight(GRID_TOP + rows * SLOT_SIZE + (rows - 1) * SLOT_GAP + FOOTER)
+		combined:SetHeight(gridTop + rows * SLOT_SIZE + (rows - 1) * SLOT_GAP + FOOTER)
 	end
 end
 
@@ -1367,13 +1374,10 @@ end)
 
 -- a kozos ablak fejlece: gombsor + kereso
 local boxBar = CreateToolbar("ZBagToolsBoxBar", combined)
-boxBar:SetPoint("TOPLEFT", combined, "TOPLEFT", PAD + 2, -28)
 
 local search = CreateFrame("EditBox", "ZBagToolsSearch", combined, "InputBoxTemplate")
 search:SetAutoFocus(false)
 search:SetHeight(20)
-search:SetPoint("LEFT", boxBar, "RIGHT", 12, 0)
-search:SetPoint("RIGHT", combined, "RIGHT", -PAD - 4, 0)
 search:SetScript("OnTextChanged", function(self)
 	searchText = (self:GetText() or ""):lower()
 	RequestRefresh()
@@ -1401,6 +1405,22 @@ optBtn:SetWidth(70)
 optBtn:SetHeight(18)
 optBtn:SetPoint("RIGHT", closeBtn, "LEFT", 0, 0)
 optBtn:SetText("Options")
+
+-- Fejlec: ha eleg szeles az ablak, minden egy sorban; ha nem, a kereso
+-- a gombsor ala kerul, teljes szelessegben.
+ApplyHeader = function(width)
+	boxBar:ClearAllPoints()
+	boxBar:SetPoint("LEFT", title, "RIGHT", 10, 0)
+	search:ClearAllPoints()
+	if width >= HEADER_WIDE_MIN then
+		search:SetPoint("LEFT", boxBar, "RIGHT", 12, 0)
+		search:SetPoint("RIGHT", optBtn, "LEFT", -8, 0)
+		return GRID_TOP_WIDE
+	end
+	search:SetPoint("TOPLEFT", combined, "TOPLEFT", PAD + 8, -34)
+	search:SetPoint("TOPRIGHT", combined, "TOPRIGHT", -PAD - 6, -34)
+	return GRID_TOP_NARROW
+end
 
 local opt = CreateFrame("Frame", "ZBagToolsOptions", combined)
 opt:SetPoint("TOPLEFT", combined, "TOPLEFT", PAD + 4, -OPT_TOP)
