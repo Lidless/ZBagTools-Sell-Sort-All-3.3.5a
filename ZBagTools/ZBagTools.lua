@@ -936,9 +936,28 @@ local function AnyBagOpen()
 end
 
 -- minden zsak bezarasa (kulon ablakok + kozos ablak)
+-- A kulon zsakablakok bezarasa. A gyari CloseBackpack NEM zarja be a
+-- Backpack-et, ha az OpenBackpack korabban "mar nyitva volt"-nak jelolte
+-- (backpackWasOpen) -- ez kereskedonel / mod-valtasnal konnyen bennragad.
+-- Ezert a gyari zaras utan a 0-4. zsakot mutato ablakokat kezzel is
+-- bezarjuk, a jelolest torolve. (Bank- es kulcszsak ablakokhoz nem nyulunk.)
+local function CloseSeparateBags()
+	CallOrig("CloseAllBags")
+	for i = 1, (NUM_CONTAINER_FRAMES or 13) do
+		local cf = _G["ContainerFrame" .. i]
+		if cf and cf:IsShown() then
+			local id = cf:GetID()
+			if id and id >= 0 and id <= 4 then
+				cf.backpackWasOpen = nil
+				cf:Hide()
+			end
+		end
+	end
+end
+
 local function CloseAll()
 	combined:Hide()
-	CallOrig("CloseAllBags")
+	CloseSeparateBags()
 end
 
 -- az aktualis mod nezetenek megnyitasa (nem valt, csak nyit)
@@ -951,7 +970,7 @@ local function OpenModeView()
 		combined:Hide()
 		CallOrig("OpenAllBags", true)
 	else
-		CallOrig("CloseAllBags")
+		CloseSeparateBags()
 		combined:Show()
 	end
 end
@@ -1523,7 +1542,7 @@ optBtn:SetScript("OnClick", function()
 	if combined.optionsMode then
 		-- vissza a mentett mod nezetere
 		if Mode() == "box" then
-			CallOrig("CloseAllBags")   -- kulon zsakok ne maradjanak nyitva a Box mellett
+			CloseSeparateBags()   -- kulon zsakok ne maradjanak nyitva a Box mellett
 			SetOptionsView(false)
 		else
 			combined:Hide()
@@ -1537,7 +1556,7 @@ end)
 OpenOptions = function()
 	-- a kulon zsakablakokat bezarjuk (pl. a fogaskereket a Backpack-bol
 	-- nyomtad); a <- Back utana a mentett mod nezetet nyitja vissza
-	CallOrig("CloseAllBags")
+	CloseSeparateBags()
 	if not combined:IsShown() then
 		combined:Show()
 	end
