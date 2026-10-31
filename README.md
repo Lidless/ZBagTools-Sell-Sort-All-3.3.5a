@@ -68,11 +68,11 @@ All settings in one place, shown inside the combined window in place of the item
 - **Bag space:** low space warning and its threshold
 - **Box window:** columns, scale, background opacity, reset window
 
-Open it with the `Options` button in the combined window's header, the small gold gear at the bottom-left of the Backpack window (next to your money), or `/zbag`. `<- Back` returns to your current bag mode's view. Settings are saved account-wide.
+Open it with the `Options` button in the combined window's header, the small gold gear in the Backpack window's top-right corner (where the default close button was), or `/zbag`. `<- Back` returns to your current bag mode's view. Settings are saved account-wide.
 
 ## Where the buttons are
 
-The button row (`Sell` `Sort` `Bag/All/Box` `X`) lives inside the Backpack window, just below the "Backpack" title, and in the header of the combined window. It only appears while those windows are open. The options gear sits in the Backpack window's money row, and the `Options` button in the combined window's header.
+The button row (`Sell` `Sort` `Bag/All/Box` `X`) lives inside the Backpack window, just below the "Backpack" title, and in the header of the combined window. It only appears while those windows are open. In the Backpack window the default close button is replaced by the options gear (bags 1-4 keep their own close buttons). In the combined window the `Options` button sits at the right end of the header; close it with the `X` in the button row, `B` or `Esc`.
 
 ## Slash commands
 

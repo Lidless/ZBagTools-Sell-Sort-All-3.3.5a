@@ -549,7 +549,7 @@ local SLOT_GAP = 4
 local PAD = 8
 local GRID_TOP_WIDE = 36     -- egysoros fejlec: cim + gombsor + kereso + Options + X
 local GRID_TOP_NARROW = 62   -- keskeny ablak: a kereso a gombsor alatt, kulon sorban
-local HEADER_WIDE_MIN = 410  -- ennyi szelessegtol fer el minden egy sorban
+local HEADER_WIDE_MIN = 395  -- ennyi szelessegtol fer el minden egy sorban
 local FOOTER = 38
 local MIN_WIDTH = 320
 local OPT_WIDTH = 340
@@ -606,6 +606,9 @@ title:SetText("ZBag")
 local closeBtn = CreateFrame("Button", "ZBagToolsCombinedClose", combined, "UIPanelCloseButton")
 closeBtn:SetPoint("TOPRIGHT", combined, "TOPRIGHT", -2, -2)
 closeBtn:SetScript("OnClick", function() combined:Hide() end)
+-- a gyari bezaro X-re nincs szukseg: a gombsor sajat X-e mindent bezar,
+-- a helyet az Options gomb kapja (Esc tovabbra is bezarja az ablakot)
+closeBtn:Hide()
 
 local freeText = combined:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 local moneyText = combined:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -1329,13 +1332,13 @@ end
 local bpBar = CreateToolbar("ZBagToolsFrame", ContainerFrame1)
 bpBar:Hide()
 
--- fogaskerek a Backpack ablak ermesoranak bal szelen -> opciok.
--- A segedkeret bal szele a Backpack ablak bal szelehez, also szele az
--- ermesor aljahoz igazodik, igy a fogaskerek az ermekkel egy sorban all.
+-- fogaskerek -> opciok. A Backpack ablakban a gyari bezaro X helyere kerul
+-- (azt elrejtjuk, a gombsorban ott a sajat X-unk, ami mindent bezar).
+-- Ha a gyari X nem talalhato, a fogaskerek az ermesor bal szelere megy.
 local gearAnchor = CreateFrame("Frame", nil, bpBar)
 local gear = CreateFrame("Button", "ZBagToolsGear", bpBar)
-gear:SetWidth(16)
-gear:SetHeight(16)
+gear:SetWidth(18)
+gear:SetHeight(18)
 -- a jatek sajat arany fogaskerek kurzora (INTERACT_CURSOR), gyari fajl
 gear:SetNormalTexture("Interface\\Cursor\\Interact")
 gear:SetHighlightTexture("Interface\\Cursor\\Interact", "ADD")
@@ -1351,24 +1354,36 @@ local function AttachBackpackBar(frame)
 	bpBar:SetFrameLevel(frame:GetFrameLevel() + 5)
 	bpBar:Show()
 
+	gear:ClearAllPoints()
+	local closeX = _G[frame:GetName() .. "CloseButton"]
+	if closeX then
+		closeX:Hide()
+		gear:SetPoint("CENTER", closeX, "CENTER", 0, 0)
+		return
+	end
 	local money = _G[frame:GetName() .. "MoneyFrame"]
 	gearAnchor:ClearAllPoints()
+	gearAnchor:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, 0)
 	if money then
-		gearAnchor:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, 0)
 		gearAnchor:SetPoint("BOTTOM", money, "BOTTOM", 0, 0)
 	else
-		gearAnchor:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, 0)
 		gearAnchor:SetPoint("BOTTOM", frame, "BOTTOM", 0, 10)
 	end
-	gear:ClearAllPoints()
 	gear:SetPoint("BOTTOMLEFT", gearAnchor, "BOTTOMLEFT", 0, -1)
 end
 
 hooksecurefunc("ContainerFrame_GenerateFrame", function(frame, size, id)
 	if id == 0 then
 		AttachBackpackBar(frame)
-	elseif bpBar:GetParent() == frame then
-		bpBar:Hide()
+	else
+		-- ugyanaz az ablak kesobb mas zsakot is mutathat: ott kell a gyari X
+		local closeX = _G[frame:GetName() .. "CloseButton"]
+		if closeX then
+			closeX:Show()
+		end
+		if bpBar:GetParent() == frame then
+			bpBar:Hide()
+		end
 	end
 end)
 
@@ -1401,9 +1416,9 @@ search:SetScript("OnLeave", GameTooltip_Hide)
 ----------------------------------------------------------------
 
 local optBtn = CreateFrame("Button", "ZBagToolsOptionsButton", combined, "UIPanelButtonTemplate")
-optBtn:SetWidth(70)
-optBtn:SetHeight(18)
-optBtn:SetPoint("RIGHT", closeBtn, "LEFT", 0, 0)
+optBtn:SetWidth(76)
+optBtn:SetHeight(20)
+optBtn:SetPoint("RIGHT", combined, "TOPRIGHT", -PAD - 2, -18)
 optBtn:SetText("Options")
 
 -- Fejlec: ha eleg szeles az ablak, minden egy sorban; ha nem, a kereso
