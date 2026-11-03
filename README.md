@@ -56,9 +56,9 @@ When enabled, your gear is repaired automatically whenever you open a vendor tha
 
 When the free slots in your normal bags drop to the threshold (default 3) or below, the free slot counter and the bag icons (including the default Backpack icon) turn red, and a one-time chat message warns you. Free slots in special bags don't count, since not every item fits there; they are shown in brackets, e.g. `Free: 3 / 64 (+12)`.
 
-### Close all bags (`X` button)
+### Close all bags (`X` in the top-right corner)
 
-Closes every open bag window, including the combined window.
+The `X` in the top-right corner of the Backpack window and of the combined window closes every open bag window, including the combined window.
 
 ### Options
 
@@ -68,11 +68,11 @@ All settings in one place, shown inside the combined window in place of the item
 - **Bag space:** low space warning and its threshold
 - **Box window:** columns, scale, background opacity, reset window
 
-Open it with the `Options` button in the combined window's header, the small gold gear in the Backpack window's top-right corner (where the default close button was), or `/zbag`. `<- Back` returns to your current bag mode's view. Settings are saved account-wide.
+Open it with the `Options` button in the combined window's header, the small gold gear at the end of the Backpack window's button row, or `/zbag`. `<- Back` returns to your current bag mode's view. Settings are saved account-wide.
 
 ## Where the buttons are
 
-The button row (`Sell` `Sort` `Bag/All/Box` `X`) lives inside the Backpack window, just below the "Backpack" title, and in the header of the combined window. It only appears while those windows are open. In the Backpack window the default close button is replaced by the options gear (bags 1-4 keep their own close buttons). In the combined window the `Options` button sits at the right end of the header; close it with the `X` in the button row, `B` or `Esc`.
+The button row (`Sell` `Sort` `Bag/All/Box` and the options gear) lives inside the Backpack window, just below the "Backpack" title, and in the header of the combined window. It only appears while those windows are open. In both windows the `X` in the top-right corner closes all bags (bags 1-4 keep their own close buttons for closing them one by one). The options gear sits at the end of the Backpack window's button row; the combined window has an `Options` button next to its `X` instead.
 
 ## Slash commands
 
