@@ -620,6 +620,7 @@ for _, bag in ipairs(BAGS) do
 	local h = CreateFrame("Frame", "ZBagToolsHolder" .. bag, combined)
 	h:SetID(bag)
 	h:SetAllPoints(combined)
+	h.zbHolder = true
 	holders[bag] = h
 	buttons[bag] = {}
 end
@@ -689,6 +690,17 @@ local function UpdateButton(b, bag, slot)
 		end
 	end
 	b:SetAlpha(alpha)
+
+	-- Ha az egér épp ezen a gombon áll (pl. most tettél ide egy itemet),
+	-- a tooltipet újra rákötjük, különben nem kap új OnEnter-t, és a Shift
+	-- összehasonlítás csak akkor jönne, ha elviszed és visszahozod az egeret.
+	if GetMouseFocus and GetMouseFocus() == b and b:IsVisible() then
+		if texture and not CursorHasItem() then
+			ContainerFrameItemButton_OnEnter(b)
+		elseif GameTooltip:IsOwned(b) then
+			GameTooltip:Hide()
+		end
+	end
 end
 
 -- tasksor: az 1-4. zsak helye (csere: ra kell huzni a zsakot / felvenni)
@@ -1610,6 +1622,7 @@ events:RegisterEvent("BAG_UPDATE_COOLDOWN")
 events:RegisterEvent("PLAYER_MONEY")
 events:RegisterEvent("UNIT_INVENTORY_CHANGED")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
+events:RegisterEvent("MODIFIER_STATE_CHANGED")
 -- kereskedo / bank / posta: a nyitast-zarast az esemenyek vezerlik,
 -- igy nem fuggunk attol, melyik gyari nyito fuggvenyt hivja a kliens
 events:RegisterEvent("MERCHANT_SHOW")
@@ -1647,6 +1660,14 @@ events:SetScript("OnEvent", function(self, event, arg1)
 		OpenModeView()
 	elseif event == "BANKFRAME_CLOSED" or event == "MAIL_CLOSED" then
 		CloseAll()
+	elseif event == "MODIFIER_STATE_CHANGED" then
+		-- Shift/Ctrl lenyomasakor a Box ablak gombja alatti tooltip azonnal
+		-- frissul (osszehasonlitas, probababu kurzor)
+		local focus = GetMouseFocus and GetMouseFocus()
+		if focus and combined:IsShown() and focus:GetParent() and focus:GetParent().zbHolder
+			and GetLink(focus:GetParent():GetID(), focus:GetID()) and not CursorHasItem() then
+			ContainerFrameItemButton_OnEnter(focus)
+		end
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		CheckLowSpace(true)
 	else
