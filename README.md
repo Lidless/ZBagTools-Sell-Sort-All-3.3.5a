@@ -25,8 +25,8 @@ The mode button cycles through three modes. The `B` key (and the Backpack icon o
 - Items are laid out in the same order Sort uses (Backpack first, then bags 1-4), so after sorting your items form one continuous block.
 - Uses the default item buttons: using, dragging, splitting, selling at a merchant and tooltips all work as usual.
 - Item quality borders, cooldowns, locked items shown greyed out.
-- Search box: items that don't match fade out.
-- Bag bar at the bottom: swap bags by dragging; hovering a bag icon highlights that bag's items.
+- Search box (by name) and two filter buttons next to it: **Resource** (ore icon: profession materials such as herbs, ore, cloth, leather, elemental and enchanting materials, raw gems) and **BOE** (coin icon: Bind on Equip items not yet bound, i.e. possible Auction House goods). Items that don't match fade out.
+- Bag bar at the bottom, in the same order as the default bag bar (bags 4-3-2-1): swap bags by dragging; hovering a bag icon highlights that bag's items.
 - Free slot counter and your money.
 - Adjustable columns, scale and background opacity (see Options).
 
@@ -36,9 +36,14 @@ Cleans up your bags in one click, across the Backpack and bags 1-4, in three pha
 
 1. **Merge partial stacks.** The back-most partial stack fills the front-most one. If only part of it fits, exactly that amount is split off, so nothing is left on the cursor. Stacks in a special bag (herb, enchanting, gem, mining, soul, quiver, ammo pouch...) are always the preferred target.
 2. **Move special items into their bags.** Herbs go into the herb bag, soul shards into the soul bag, arrows into the quiver, and so on — as long as there is free room there.
-3. **Fill the gaps.** Bags are processed right to left as on the default bag bar (Backpack first), and within a bag from the top-left slot to the bottom-right one. The last item is moved into the first empty slot until the two meet. Special bag slots only receive items that fit them, and items are never pulled out of a special bag into a normal one.
+3. **Fill the gaps** or **sort by type**, depending on the Sort mode chosen in Options:
+   - *Fill gaps only* (default): bags are processed right to left as on the default bag bar (Backpack first), and within a bag from the top-left slot to the bottom-right one. The last item is moved into the first empty slot until the two meet.
+   - *Fill gaps + sort by type*: items are arranged by type (consumables, reagents, trade goods, gems, glyphs, recipes, weapons, armor, ...), then subtype, quality (best first) and name; empty slots end up at the back.
+   - *Sort by type + group same slot*: like the previous one, but gear is also grouped by equipment slot (e.g. all chest pieces next to each other).
 
-Locked slots are skipped. Before every pass Sort waits for the server to confirm the previous moves, so you only need to press it once.
+   Special bag slots only receive items that fit them, and items are never pulled out of a special bag into a normal one.
+
+Locked and pinned slots are skipped. Before every pass Sort waits for the server to confirm the previous moves, so you only need to press it once.
 
 ### Sell Grey (`Sell` button / `/zsell`)
 
@@ -47,6 +52,21 @@ Sells every grey (poor quality) item in your bags in one click. Left-click only 
 - **Auto sell:** right-click the `Sell` button (or use `/zbag autosell`) to toggle it. While it's on, the button has a green border and your greys are sold automatically a moment after you open a vendor. The setting is saved account-wide.
 - **Sort after selling:** whenever something was actually sold (manually or automatically), Sort runs by itself once the sold items have left your bags. After a sale it only reports in chat if it actually moved something.
 - **Earnings:** the chat message shows how much the greys sold for, e.g. `Sold 7 grey item(s) for 1g 23s 40c.`
+- **Unusable soulbound gear (Options, off by default):** also sells soulbound gear you can't use because of your class or its armor/weapon type. Items that are only red because of a level requirement are kept.
+- Items in pinned slots are never sold.
+
+### Pinned slots (Alt+Right-click)
+
+Alt+Right-click a bag slot (in the default bag windows or the combined window) to pin it; do it again to unpin. A gold lock marks pinned slots and their tooltip says so. Sort never moves the item in a pinned slot and selling never touches it; an empty pinned slot stays free. Pins are saved per character.
+
+### Bag display (Options)
+
+- **Tint unusable items red:** items your character can't use (class, armor/weapon type, level, ...) are tinted red, in the default bag windows and the combined window.
+- **Highlight new items:** items that came into your bags since you last opened them glow until you hover them or close all bags.
+
+### Item counts in tooltips (Options, off by default)
+
+Adds `Bags: N` and `Bank: N` lines to item tooltips for the current character. The bank is read when you visit it, so the bank count shows the state from your last visit. With "Include alt characters" your other characters on the same realm are listed too (after you have logged in with them once). Left off by default because Carbonite can show the same.
 
 ### Auto repair (Options)
 
@@ -64,8 +84,11 @@ The `X` in the top-right corner of the Backpack window and of the combined windo
 
 All settings in one place, shown inside the combined window in place of the item grid:
 
-- **Vendor:** auto sell, sort after selling, show earnings, auto repair, use guild bank funds first (experimental)
+- **Vendor:** auto sell, sort after selling, show earnings, also sell unusable soulbound gear, auto repair, use guild bank funds first (experimental)
+- **Sort:** fill gaps only / fill gaps + sort by type / sort by type + group same slot
 - **Bag space:** low space warning and its threshold
+- **Bag display:** tint unusable items red, highlight new items
+- **Tooltip:** item counts (bags, bank), include alt characters
 - **Box window:** columns, scale, background opacity, reset window
 
 Open it with the `Options` button in the combined window's header, the small gold gear at the end of the Backpack window's button row, or `/zbag`. `<- Back` returns to your current bag mode's view. Settings are saved account-wide.

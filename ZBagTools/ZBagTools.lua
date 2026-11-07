@@ -102,10 +102,14 @@ local DEFAULTS = {
 	autoRepair = false, repairGuild = true,
 	lowWarn = true, lowThreshold = 3,
 	bgAlpha = 0.9,
+	sortMode = "fill",          -- fill | type | typeslot
+	sellUnusable = false,       -- nem hasznalhato soulbound felszereles eladasa
+	tintUnusable = true, newGlow = true,
+	tipCounts = false, tipAlts = false,
 }
 
 -- kesobb definialt fuggvenyek (az opcios nezethez)
-local RefreshOptions, OpenOptions
+local RefreshOptions, OpenOptions, RefreshAllBagViews
 local MODES = {"bag", "all", "box"}
 local MODE_LABEL = {bag = "Bag", all = "All", box = "Box"}
 local MODE_DESC = {
@@ -152,7 +156,280 @@ local function FormatMoney(m)
 end
 
 ----------------------------------------------------------------
--- Sell Grey
+-- Karakter-azonosito, vedett (rogzitett) slotok
+-- A vedett slot karakterenkent tarolodik (bag:slot). A benne levo itemet
+-- a Sort nem mozgatja, az eladas nem adja el; ures vedett slotba sem
+-- rak semmit a Sort. Ki/be: Alt+jobb klikk a sloton.
+----------------------------------------------------------------
+
+local function CharKey()
+	return (GetRealmName() or "?") .. "-" .. (UnitName("player") or "?")
+end
+
+local function Pins()
+	if not ZBagToolsDB then
+		return {}
+	end
+	ZBagToolsDB.pins = ZBagToolsDB.pins or {}
+	local k = CharKey()
+	ZBagToolsDB.pins[k] = ZBagToolsDB.pins[k] or {}
+	return ZBagToolsDB.pins[k]
+end
+
+local function IsPinned(bag, slot)
+	return Pins()[bag .. ":" .. slot] and true or false
+end
+
+----------------------------------------------------------------
+-- Tooltip-olvasas (rejtett tooltip): soulbound, BoE, piros sorok.
+-- Slotonkent cache-eljuk; a zsak valtozasakor, szintlepeskor es
+-- uj fegyverismeretnel uritjuk.
+--  red      = barmi piros a tooltipben (szint, kaszt, pancel/fegyvertipus...)
+--  classRed = kaszt / faj / pancel- vagy fegyvertipus miatt nem hasznalhato
+--             (a "Requires Level" NEM ide tartozik: az atmeneti)
+----------------------------------------------------------------
+
+local scanTip = CreateFrame("GameTooltip", "ZBagToolsScanTip", nil, "GameTooltipTemplate")
+local scanCache = {}
+
+local TXT_SOULBOUND = ITEM_SOULBOUND or "Soulbound"
+local TXT_BOE = ITEM_BIND_ON_EQUIP or "Binds when equipped"
+local TXT_CLASSES = (ITEM_CLASSES_ALLOWED or "Classes: %s"):gsub("%%s", "")
+local TXT_RACES = (ITEM_RACES_ALLOWED or "Races: %s"):gsub("%%s", "")
+
+local function IsRedText(fs)
+	local r, g, b = fs:GetTextColor()
+	return r and r > 0.95 and g < 0.2 and b < 0.2
+end
+
+local function ClearScanCache(bag)
+	if bag == nil then
+		scanCache = {}
+		return
+	end
+	local prefix = bag .. ":"
+	for k in pairs(scanCache) do
+		if k:sub(1, #prefix) == prefix then
+			scanCache[k] = nil
+		end
+	end
+end
+
+local function ScanSlot(bag, slot)
+	local link = GetLink(bag, slot)
+	if not link then
+		return nil
+	end
+	local key = bag .. ":" .. slot
+	local c = scanCache[key]
+	if c and c.link == link then
+		return c
+	end
+	local info = {link = link, soulbound = false, boe = false, red = false, classRed = false}
+	scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+	scanTip:ClearLines()
+	scanTip:SetBagItem(bag, slot)
+	for i = 2, scanTip:NumLines() do
+		local l = _G["ZBagToolsScanTipTextLeft" .. i]
+		local r = _G["ZBagToolsScanTipTextRight" .. i]
+		local lt = l and l:GetText()
+		if lt then
+			if lt == TXT_SOULBOUND then
+				info.soulbound = true
+			elseif lt == TXT_BOE then
+				info.boe = true
+			end
+			if IsRedText(l) then
+				info.red = true
+				if lt:sub(1, #TXT_CLASSES) == TXT_CLASSES or lt:sub(1, #TXT_RACES) == TXT_RACES then
+					info.classRed = true
+				end
+			end
+		end
+		-- a jobb oldali piros szoveg a pancel-/fegyvertipus (pl. "Plate", "Polearm")
+		if r and r:IsShown() and r:GetText() and IsRedText(r) then
+			info.red = true
+			info.classRed = true
+		end
+	end
+	scanTip:Hide()
+	local _, _, locked = GetContainerItemInfo(bag, slot)
+	if not locked then
+		scanCache[key] = info   -- mozgatas kozben (zarolt slot) nem taroljuk
+	end
+	return info
+end
+
+----------------------------------------------------------------
+-- Keszlet: itemID -> darabszam. A sajat zsakokat mindig, a bankot csak
+-- nyitott bankablaknal lehet olvasni (utana a legutobbi allapot marad).
+-- Karakterenkent tarolva (account szintu SavedVariables), a tooltip
+-- darabszamhoz es az alt karakterekhez.
+----------------------------------------------------------------
+
+local BANK_BAGS = {-1, 5, 6, 7, 8, 9, 10, 11}
+local bankOpen = false
+
+local function ScanContainers(list)
+	local t = {}
+	for _, bag in ipairs(list) do
+		for slot = 1, (NumSlots(bag) or 0) do
+			local id, count = SlotInfo(bag, slot)
+			if id then
+				t[id] = (t[id] or 0) + (count or 1)
+			end
+		end
+	end
+	return t
+end
+
+local function CharData()
+	ZBagToolsDB.chars = ZBagToolsDB.chars or {}
+	local k = CharKey()
+	ZBagToolsDB.chars[k] = ZBagToolsDB.chars[k] or {}
+	return ZBagToolsDB.chars[k]
+end
+
+local function SaveBags()
+	if ZBagToolsDB then
+		CharData().bags = ScanContainers(BAGS)
+	end
+end
+
+local function SaveBank()
+	if ZBagToolsDB and bankOpen then
+		CharData().bank = ScanContainers(BANK_BAGS)
+	end
+end
+
+----------------------------------------------------------------
+-- Uj itemek: ami a legutobbi zsaknyitas ota kerult be. Itemenkent a
+-- darabszamot nezzuk (igy a Sort mozgatasa nem szamit ujnak). Amikor
+-- minden zsak bezarul, vagy az egeret egy item fole viszed, "lattuk".
+----------------------------------------------------------------
+
+local seenCounts = nil
+local nowCounts, nowStamp = {}, nil
+
+local function CurrentCounts()
+	local t = GetTime()
+	if nowStamp ~= t then
+		nowCounts = ScanContainers(BAGS)
+		nowStamp = t
+	end
+	return nowCounts
+end
+
+local function MarkAllSeen()
+	nowStamp = nil
+	seenCounts = CurrentCounts()
+end
+
+local function MarkSeen(id)
+	if seenCounts and id then
+		seenCounts[id] = CurrentCounts()[id] or 0
+	end
+end
+
+local function IsNewItem(id)
+	if not seenCounts or not id then
+		return false
+	end
+	return (CurrentCounts()[id] or 0) > (seenCounts[id] or 0)
+end
+
+----------------------------------------------------------------
+-- Kereses a nevben + szuro gombok a kereso mellett:
+--  resource : szakma-alapanyag (Trade Goods: herb, erc, szovet, bor,
+--             elemental, enchant anyag, hus... + nyers gem)
+--  boe      : Bind on Equip (lehetseges aukcios hazi aru)
+----------------------------------------------------------------
+
+local RESOURCE_TYPES = {["Trade Goods"] = true, ["Gem"] = true}
+
+local function MatchesSearch(text, bag, slot, link, name)
+	return name and name:lower():find(text, 1, true) and true or false
+end
+
+local function MatchesFilter(filter, bag, slot, link)
+	if filter == "resource" then
+		local _, _, _, _, _, itemType = GetItemInfo(link)
+		return itemType and RESOURCE_TYPES[itemType] or false
+	elseif filter == "boe" then
+		local info = ScanSlot(bag, slot)
+		return info and info.boe and not info.soulbound or false
+	end
+	return true
+end
+
+----------------------------------------------------------------
+-- Gombok diszitese (Box ablak es a gyari zsakablakok is):
+-- vedett slot jel, piros a nem hasznalhato item, feny az uj itemen
+----------------------------------------------------------------
+
+local function DecorateButton(b, bag, slot)
+	if not b or not b.GetName or not b:GetName() then
+		return
+	end
+	if not b.zbPin then
+		-- ugyanaz a lakat, mint a ZBar-ban: a Dungeon Finder (sotetszurke)
+		-- lakatja aranyra szinezve, es ugyanez a kep meg ketszer ADD modban
+		-- rarakva, hogy fenyes legyen (magaban szinte lathatatlan)
+		local lock = {}
+		for i = 1, 3 do
+			local t = b:CreateTexture(nil, "OVERLAY")
+			t:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-LOCK")
+			t:SetTexCoord(0, 0.71875, 0, 0.875)
+			t:SetWidth(12)
+			t:SetHeight(14)
+			t:SetPoint("TOPLEFT", b, "TOPLEFT", 2, -2)
+			t:SetVertexColor(1, 0.82, 0)
+			if i > 1 then
+				t:SetBlendMode("ADD")
+			end
+			t:Hide()
+			lock[i] = t
+		end
+		b.zbPin = {
+			Show = function() for _, t in ipairs(lock) do t:Show() end end,
+			Hide = function() for _, t in ipairs(lock) do t:Hide() end end,
+		}
+		local g = b:CreateTexture(nil, "OVERLAY")
+		g:SetTexture("Interface\\Buttons\\CheckButtonHilight")
+		g:SetBlendMode("ADD")
+		g:SetAllPoints(b)
+		g:Hide()
+		b.zbGlow = g
+	end
+
+	if IsPinned(bag, slot) then b.zbPin:Show() else b.zbPin:Hide() end
+
+	local link = GetLink(bag, slot)
+	local icon = _G[b:GetName() .. "IconTexture"]
+	if not link then
+		b.zbGlow:Hide()
+		return
+	end
+	-- a zarolast ugyanonnan olvassuk, mint a gyari szurkites (SetItemButtonDesaturated);
+	-- a Grimfall C_Container zarolas-adata kesve frissul, emiatt maradt feher
+	local _, _, locked = GetContainerItemInfo(bag, slot)
+	if icon and not locked then
+		local info = DB().tintUnusable and ScanSlot(bag, slot)
+		if info and info.red then
+			icon:SetVertexColor(1, 0.3, 0.3)
+		else
+			icon:SetVertexColor(1, 1, 1)
+		end
+	end
+	if DB().newGlow and IsNewItem(ParseItemID(link)) then
+		b.zbGlow:Show()
+	else
+		b.zbGlow:Hide()
+	end
+end
+
+----------------------------------------------------------------
+-- Sell Grey (+ opcionalisan a nem hasznalhato soulbound felszereles)
 ----------------------------------------------------------------
 
 local function IsGrey(link, quality)
@@ -183,27 +460,50 @@ local function SellGrey(auto)
 	end
 	local soldSlots = {}
 	local earned = 0
+	local greys, unusable = 0, 0
+	local sellUnusable = DB().sellUnusable
 	for _, bag in ipairs(BAGS) do
 		local slots = NumSlots(bag)
 		for slot = 1, slots do
 			local link = GetLink(bag, slot)
-			if link and IsGrey(link, nil) then
-				local _, count = SlotInfo(bag, slot)
-				local price = select(11, GetItemInfo(link)) or 0
-				earned = earned + price * (count or 1)
-				UseSlot(bag, slot)
-				table.insert(soldSlots, {bag = bag, slot = slot, link = link})
+			if link and not IsPinned(bag, slot) then
+				local sell = false
+				if IsGrey(link, nil) then
+					sell = true
+					greys = greys + 1
+				elseif sellUnusable then
+					-- soulbound felszereles, amit kaszt / pancel- vagy fegyvertipus
+					-- miatt nem hasznalhatsz (szintigeny miatt nem adjuk el)
+					local _, _, _, _, _, _, _, _, equipLoc, _, price = GetItemInfo(link)
+					if equipLoc and equipLoc ~= "" and price and price > 0 then
+						local info = ScanSlot(bag, slot)
+						if info and info.soulbound and info.classRed then
+							sell = true
+							unusable = unusable + 1
+						end
+					end
+				end
+				if sell then
+					local _, count = SlotInfo(bag, slot)
+					local price = select(11, GetItemInfo(link)) or 0
+					earned = earned + price * (count or 1)
+					UseSlot(bag, slot)
+					table.insert(soldSlots, {bag = bag, slot = slot, link = link})
+				end
 			end
 		end
 	end
 	if #soldSlots > 0 then
-		local msg = (auto and "Auto-sold " or "Sold ") .. #soldSlots .. " grey item(s)"
+		local parts = {}
+		if greys > 0 then table.insert(parts, greys .. " grey item(s)") end
+		if unusable > 0 then table.insert(parts, unusable .. " unusable item(s)") end
+		local msg = (auto and "Auto-sold " or "Sold ") .. table.concat(parts, " and ")
 		if DB().sellReport and earned > 0 then
 			msg = msg .. " for " .. FormatMoney(earned)
 		end
 		p(msg .. ".")
 	elseif not auto then
-		p("No grey items to sell in your bags.")
+		p("Nothing to sell in your bags.")
 	end
 	return soldSlots
 end
@@ -247,6 +547,7 @@ local function Snapshot()
 				bag = bag, slot = slot, bagType = bagType,
 				link = link, itemID = itemID, count = count,
 				locked = locked and true or false,
+				pinned = IsPinned(bag, slot),
 			})
 		end
 	end
@@ -302,7 +603,7 @@ local function CombineStacks()
 	local list = Snapshot()
 	local buckets = {}
 	for _, s in ipairs(list) do
-		if s.itemID and s.count and not s.locked then
+		if s.itemID and s.count and not s.locked and not s.pinned then
 			local _, _, _, _, _, _, _, maxStack = GetItemInfo(s.itemID)
 			if maxStack and maxStack > 1 and s.count < maxStack then
 				s.maxStack = maxStack
@@ -350,7 +651,7 @@ local function MoveSpecialItems()
 	local list = Snapshot()
 	local holes = {}
 	for _, s in ipairs(list) do
-		if s.bagType ~= 0 and not s.link and not s.locked then
+		if s.bagType ~= 0 and not s.link and not s.locked and not s.pinned then
 			table.insert(holes, s)
 		end
 	end
@@ -361,7 +662,7 @@ local function MoveSpecialItems()
 	local moves = 0
 	for k = #list, 1, -1 do
 		local s = list[k]
-		if s.bagType == 0 and s.link and not s.locked then
+		if s.bagType == 0 and s.link and not s.locked and not s.pinned then
 			for _, hole in ipairs(holes) do
 				if not hole.used and ItemFitsBag(s.link, hole.bagType) then
 					MoveItem(s, hole)
@@ -394,14 +695,14 @@ local function CompactBags()
 
 	for front = 1, #list do
 		local hole = list[front]
-		if not hole.link and not hole.locked and not used[front] then
+		if not hole.link and not hole.locked and not hole.pinned and not used[front] then
 			local k
 			if hole.bagType == 0 then
 				if not normalDone then
 					k = back
 					while k > front do
 						local s = list[k]
-						if not used[k] and s.link and not s.locked and s.bagType == 0 then
+						if not used[k] and s.link and not s.locked and not s.pinned and s.bagType == 0 then
 							break
 						end
 						k = k - 1
@@ -417,7 +718,7 @@ local function CompactBags()
 				k = #list
 				while k > front do
 					local s = list[k]
-					if not used[k] and s.link and not s.locked and ItemFitsBag(s.link, hole.bagType) then
+					if not used[k] and s.link and not s.locked and not s.pinned and ItemFitsBag(s.link, hole.bagType) then
 						break
 					end
 					k = k - 1
@@ -444,7 +745,116 @@ end
 -- kor mozgatasait (nincs zarolt slot, ures a kurzor).
 ----------------------------------------------------------------
 
+----------------------------------------------------------------
+-- 3/b. fazis (Sort mod: "type" / "typeslot"): valodi rendezes.
+-- Zsak-csoportonkent (normal zsakok egyutt, specialis zsakok tipusonkent
+-- kulon) kiszamoljuk a kivant sorrendet, es cserekkel odarakjuk az
+-- itemeket; az ures helyek a csoport vegere kerulnek. Vedett slot nem
+-- vesz reszt. Egy korben egy slot csak egyszer szerepel.
+--  type     : tipus -> altipus -> minoseg (jobb elore) -> nev
+--  typeslot : tipus -> felszereles-hely (pl. a mellvertek egymas mellett)
+--             -> altipus -> minoseg -> nev
+----------------------------------------------------------------
+
+local TYPE_ORDER = {
+	["Consumable"] = 1, ["Reagent"] = 2, ["Trade Goods"] = 3, ["Gem"] = 4,
+	["Glyph"] = 5, ["Recipe"] = 6, ["Weapon"] = 7, ["Armor"] = 8,
+	["Projectile"] = 9, ["Quiver"] = 10, ["Container"] = 11, ["Quest"] = 12,
+	["Key"] = 13, ["Miscellaneous"] = 14,
+}
+
+local EQUIP_ORDER = {
+	INVTYPE_HEAD = 1, INVTYPE_NECK = 2, INVTYPE_SHOULDER = 3, INVTYPE_CLOAK = 4,
+	INVTYPE_CHEST = 5, INVTYPE_ROBE = 5, INVTYPE_BODY = 6, INVTYPE_TABARD = 7,
+	INVTYPE_WRIST = 8, INVTYPE_HAND = 9, INVTYPE_WAIST = 10, INVTYPE_LEGS = 11,
+	INVTYPE_FEET = 12, INVTYPE_FINGER = 13, INVTYPE_TRINKET = 14,
+	INVTYPE_WEAPON = 15, INVTYPE_2HWEAPON = 16, INVTYPE_WEAPONMAINHAND = 17,
+	INVTYPE_WEAPONOFFHAND = 18, INVTYPE_SHIELD = 19, INVTYPE_HOLDABLE = 20,
+	INVTYPE_RANGED = 21, INVTYPE_RANGEDRIGHT = 21, INVTYPE_THROWN = 22,
+	INVTYPE_RELIC = 23,
+}
+
+local function SortKey(s, mode)
+	local name, _, quality, _, _, itemType, subType, _, equipLoc = GetItemInfo(s.link)
+	return {
+		TYPE_ORDER[itemType or ""] or 50,
+		mode == "typeslot" and (EQUIP_ORDER[equipLoc or ""] or 99) or 0,
+		subType or "",
+		-(quality or 0),
+		name or "",
+		-(s.count or 1),
+		s.link,
+	}
+end
+
+local function KeyLess(a, b)
+	for i = 1, #a do
+		if a[i] ~= b[i] then
+			return a[i] < b[i]
+		end
+	end
+	return false
+end
+
+local function SameItem(a, b)
+	return a and b and a.link and b.link and a.link == b.link and a.count == b.count
+end
+
+local function ArrangeBags(mode)
+	local list = Snapshot()
+	local groups, order = {}, {}
+	for _, s in ipairs(list) do
+		if not s.pinned then
+			local g = groups[s.bagType]
+			if not g then
+				g = {pos = {}, items = {}, busy = false}
+				groups[s.bagType] = g
+				table.insert(order, g)
+			end
+			table.insert(g.pos, s)
+			if s.locked then
+				g.busy = true
+			end
+			if s.link then
+				s.key = SortKey(s, mode)
+				table.insert(g.items, s)
+			end
+		end
+	end
+
+	local moves = 0
+	for _, g in ipairs(order) do
+		if not g.busy then
+			table.sort(g.items, function(a, b) return KeyLess(a.key, b.key) end)
+			local used = {}
+			for i, dst in ipairs(g.pos) do
+				local want = g.items[i]
+				if want and not used[i] and not SameItem(dst, want) then
+					for j, src in ipairs(g.pos) do
+						if j ~= i and not used[j] and SameItem(src, want) and not SameItem(src, g.items[j]) then
+							-- csere (vagy mozgatas ures helyre)
+							PickupSlot(src.bag, src.slot)
+							if CursorHasItem() then
+								PickupSlot(dst.bag, dst.slot)
+							end
+							if CursorHasItem() then
+								ClearCursor()
+							end
+							used[i] = true
+							used[j] = true
+							moves = moves + 1
+							break
+						end
+					end
+				end
+			end
+		end
+	end
+	return moves
+end
+
 local SORT_MAX_PASSES = 10
+local ARRANGE_MAX_PASSES = 40
 local SORT_TICK = 0.1
 local SORT_TIMEOUT = 5
 
@@ -473,20 +883,24 @@ local function SortStep()
 		sortState.totalSpecial = sortState.totalSpecial + n
 		sortState.passes = sortState.passes + 1
 		if n == 0 or sortState.passes >= SORT_MAX_PASSES then
-			sortState.phase = "compact"
+			local m = DB().sortMode
+			sortState.phase = (m == "type" or m == "typeslot") and "arrange" or "compact"
 			sortState.passes = 0
 		end
 	else
-		local n = CompactBags()
+		local arrange = sortState.phase == "arrange"
+		local n = arrange and ArrangeBags(DB().sortMode) or CompactBags()
 		sortState.totalMoves = sortState.totalMoves + n
 		sortState.passes = sortState.passes + 1
-		if n == 0 or sortState.passes >= SORT_MAX_PASSES then
+		if n == 0 or sortState.passes >= (arrange and ARRANGE_MAX_PASSES or SORT_MAX_PASSES) then
 			local changed = sortState.totalMerges + sortState.totalSpecial + sortState.totalMoves
 			if sortState.quiet and changed == 0 then
 				-- eladas utani auto Sort: ha nem tortent semmi, nem szolunk
 				SortStop(nil)
 			else
-				SortStop(string.format("Done: %d stack merges, %d items moved to special bags, %d gaps filled.", sortState.totalMerges, sortState.totalSpecial, sortState.totalMoves))
+				SortStop(string.format("Done: %d stack merges, %d items moved to special bags, %d %s.",
+					sortState.totalMerges, sortState.totalSpecial, sortState.totalMoves,
+					arrange and "items rearranged" or "gaps filled"))
 			end
 		end
 	end
@@ -549,12 +963,12 @@ local SLOT_GAP = 4
 local PAD = 8
 local GRID_TOP_WIDE = 36     -- egysoros fejlec: cim + gombsor + kereso + Options + X
 local GRID_TOP_NARROW = 62   -- keskeny ablak: a kereso a gombsor alatt, kulon sorban
-local HEADER_WIDE_MIN = 395  -- ennyi szelessegtol fer el minden egy sorban
+local HEADER_WIDE_MIN = 420  -- ennyi szelessegtol fer el minden egy sorban (10 oszlop)
 local FOOTER = 38
 local MIN_WIDTH = 320
-local OPT_WIDTH = 340
+local OPT_WIDTH = 600
 local OPT_TOP = 32      -- opcios nezetben nincs gombsor/kereso, feljebb kezdodik
-local OPT_HEIGHT = OPT_TOP + 414 + FOOTER
+local OPT_HEIGHT = OPT_TOP + 366 + FOOTER
 
 local combined = CreateFrame("Frame", "ZBagToolsCombined", UIParent)
 combined:Hide()
@@ -614,6 +1028,7 @@ moneyText:SetPoint("BOTTOMRIGHT", combined, "BOTTOMRIGHT", -12, 14)
 local holders = {}      -- zsakonkent egy lathatatlan szulo, ID = zsak szama
 local buttons = {}      -- buttons[bag][slot]
 local searchText = ""
+local activeFilter = nil   -- nil | "resource" | "boe"
 local hoverBag = nil    -- a tasksor egy ikonja felett: csak az a zsak latszik elesen
 
 for _, bag in ipairs(BAGS) do
@@ -684,12 +1099,18 @@ local function UpdateButton(b, bag, slot)
 	local alpha = 1
 	if hoverBag and hoverBag ~= bag then
 		alpha = 0.25
-	elseif searchText ~= "" then
-		if not (name and name:lower():find(searchText, 1, true)) then
+	else
+		if searchText ~= "" and not (link and MatchesSearch(searchText, bag, slot, link, name)) then
+			alpha = 0.25
+		end
+		if activeFilter and not (link and MatchesFilter(activeFilter, bag, slot, link)) then
 			alpha = 0.25
 		end
 	end
 	b:SetAlpha(alpha)
+
+	-- vedett slot jel, piros (nem hasznalhato), feny (uj item)
+	DecorateButton(b, bag, slot)
 
 	-- Ha az egér épp ezen a gombon áll (pl. most tettél ide egy itemet),
 	-- a tooltipet újra rákötjük, különben nem kap új OnEnter-t, és a Shift
@@ -720,7 +1141,8 @@ for bag = 1, 4 do
 	local bb = CreateFrame("Button", "ZBagToolsBagSlot" .. bag, combined)
 	bb:SetWidth(BAGBAR_SIZE)
 	bb:SetHeight(BAGBAR_SIZE)
-	bb:SetPoint("BOTTOMLEFT", combined, "BOTTOMLEFT", PAD + 2 + (bag - 1) * (BAGBAR_SIZE + 2), PAD + 2)
+	-- a gyari tasksor sorrendje: balrol jobbra 4., 3., 2., 1. zsak
+	bb:SetPoint("BOTTOMLEFT", combined, "BOTTOMLEFT", PAD + 2 + (4 - bag) * (BAGBAR_SIZE + 2), PAD + 2)
 	bb.icon = bb:CreateTexture(nil, "ARTWORK")
 	bb.icon:SetAllPoints(bb)
 	bb:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
@@ -752,7 +1174,7 @@ for bag = 1, 4 do
 	end)
 	bagBar[bag] = bb
 end
-freeText:SetPoint("LEFT", bagBar[4], "RIGHT", 8, 0)
+freeText:SetPoint("LEFT", bagBar[1], "RIGHT", 8, 0)
 
 local lastSizes = {}
 
@@ -885,6 +1307,7 @@ local function RequestLowCheck()
 		self:SetScript("OnUpdate", nil)
 		lowCheckPending = false
 		CheckLowSpace(true)
+		SaveBags()
 	end)
 end
 combined.Refresh = RefreshCombined
@@ -1273,10 +1696,15 @@ local function CycleMode(self)
 	end
 end
 
-local function SimpleTooltip(btn, text)
+-- cim + opcionalis tovabbi sorok (roviden tartva, hogy ne legyen hosszu csik)
+local function SimpleTooltip(btn, text, ...)
+	local lines = {...}
 	btn:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
 		GameTooltip:SetText(text)
+		for _, l in ipairs(lines) do
+			GameTooltip:AddLine(l, 1, 1, 1)
+		end
 		GameTooltip:Show()
 	end)
 	btn:SetScript("OnLeave", GameTooltip_Hide)
@@ -1313,7 +1741,10 @@ local function CreateToolbar(name, parent, withGear)
 	sort:SetText("Sort")
 	sort:SetPoint("LEFT", sell, "RIGHT", 2, 0)
 	sort:SetScript("OnClick", SortBags)
-	SimpleTooltip(sort, "Merge partial stacks, move special items (herbs, shards, ammo...) into their bags, then fill gaps from the back")
+	SimpleTooltip(sort, "Sort bags",
+		"1. Merge partial stacks",
+		"2. Move herbs, shards, ammo... into their bags",
+		"3. Fill gaps or sort by type (see Options)")
 
 	local mode = CreateFrame("Button", name .. "Mode", bar, "UIPanelButtonTemplate")
 	mode:SetWidth(38)
@@ -1433,19 +1864,76 @@ optBtn:SetPoint("RIGHT", closeBtn, "LEFT", 2, 0)
 closeBtn:SetScript("OnClick", function() CloseAll() end)
 optBtn:SetText("Options")
 
+-- Szuro gombok a kereso mellett (ki/be kapcsolhato, egyszerre egy aktiv):
+--  Resource (erc ikon): szakma-alapanyagok   BOE (erme ikon): Bind on Equip
+local filterButtons = {}
+
+local function UpdateFilterButtons()
+	for key, fb in pairs(filterButtons) do
+		if activeFilter == key then
+			fb:LockHighlight()
+			fb.zbBorder:Show()
+		else
+			fb:UnlockHighlight()
+			fb.zbBorder:Hide()
+		end
+	end
+end
+
+local function CreateFilterButton(key, icon, title, line)
+	local fb = CreateFrame("Button", "ZBagToolsFilter_" .. key, combined)
+	fb:SetWidth(20)
+	fb:SetHeight(20)
+	fb:SetNormalTexture(icon)
+	fb:GetNormalTexture():SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	fb:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+	local border = fb:CreateTexture(nil, "OVERLAY")
+	border:SetTexture("Interface\\Buttons\\CheckButtonHilight")
+	border:SetBlendMode("ADD")
+	border:SetAllPoints(fb)
+	border:Hide()
+	fb.zbBorder = border
+	fb:SetScript("OnClick", function()
+		activeFilter = (activeFilter ~= key) and key or nil
+		UpdateFilterButtons()
+		RequestRefresh()
+	end)
+	fb:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText(title)
+		GameTooltip:AddLine(line, 1, 1, 1)
+		GameTooltip:AddLine("Click to toggle the filter", 0.6, 0.8, 1)
+		GameTooltip:Show()
+	end)
+	fb:SetScript("OnLeave", GameTooltip_Hide)
+	filterButtons[key] = fb
+	return fb
+end
+
+local resBtn = CreateFilterButton("resource", "Interface\\Icons\\INV_Ore_Copper_01",
+	"Resource", "Profession materials: herbs, ore, cloth, leather, gems...")
+local boeBtn = CreateFilterButton("boe", "Interface\\Icons\\INV_Misc_Coin_02",
+	"BOE", "Bind on Equip items (possible Auction House goods)")
+
 -- Fejlec: ha eleg szeles az ablak, minden egy sorban; ha nem, a kereso
--- a gombsor ala kerul, teljes szelessegben.
+-- (es a szuro gombok) a gombsor ala kerulnek, teljes szelessegben.
 ApplyHeader = function(width)
 	boxBar:ClearAllPoints()
 	boxBar:SetPoint("LEFT", title, "RIGHT", 10, 0)
 	search:ClearAllPoints()
+	boeBtn:ClearAllPoints()
+	resBtn:ClearAllPoints()
 	if width >= HEADER_WIDE_MIN then
+		boeBtn:SetPoint("RIGHT", optBtn, "LEFT", -6, 0)
+		resBtn:SetPoint("RIGHT", boeBtn, "LEFT", -3, 0)
 		search:SetPoint("LEFT", boxBar, "RIGHT", 12, 0)
-		search:SetPoint("RIGHT", optBtn, "LEFT", -8, 0)
+		search:SetPoint("RIGHT", resBtn, "LEFT", -6, 0)
 		return GRID_TOP_WIDE
 	end
+	boeBtn:SetPoint("TOPRIGHT", combined, "TOPRIGHT", -PAD - 4, -34)
+	resBtn:SetPoint("RIGHT", boeBtn, "LEFT", -3, 0)
 	search:SetPoint("TOPLEFT", combined, "TOPLEFT", PAD + 8, -34)
-	search:SetPoint("TOPRIGHT", combined, "TOPRIGHT", -PAD - 6, -34)
+	search:SetPoint("BOTTOMRIGHT", resBtn, "BOTTOMLEFT", -6, 0)
 	return GRID_TOP_NARROW
 end
 
@@ -1455,17 +1943,26 @@ opt:SetPoint("BOTTOMRIGHT", combined, "BOTTOMRIGHT", -PAD - 4, FOOTER)
 opt:Hide()
 
 local optWidgets = {}
+local optX = 0          -- az aktualis oszlop bal szele (ket oszlopos elrendezes)
+local OPT_COL2 = 305
 
 local function OptHeader(text, y)
 	local fs = opt:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	fs:SetPoint("TOPLEFT", opt, "TOPLEFT", 0, y)
+	fs:SetPoint("TOPLEFT", opt, "TOPLEFT", optX, y)
+	fs:SetText(text)
+end
+
+local function OptNote(text, y)
+	local fs = opt:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	fs:SetPoint("TOPLEFT", opt, "TOPLEFT", optX, y)
+	fs:SetJustifyH("LEFT")
 	fs:SetText(text)
 end
 
 local function OptCheck(key, label, y, indent, onChange)
 	local name = "ZBagToolsOpt_" .. key
 	local cb = CreateFrame("CheckButton", name, opt, "OptionsCheckButtonTemplate")
-	cb:SetPoint("TOPLEFT", opt, "TOPLEFT", indent or 0, y)
+	cb:SetPoint("TOPLEFT", opt, "TOPLEFT", optX + (indent or 0), y)
 	_G[name .. "Text"]:SetText(label)
 	cb:SetScript("OnClick", function(self)
 		ZBagToolsDB[key] = self:GetChecked() and true or false
@@ -1476,11 +1973,28 @@ local function OptCheck(key, label, y, indent, onChange)
 	return cb
 end
 
+-- valasztogomb: ugyanahhoz a kulcshoz tobb ertek, mindig egy van bejelolve
+local function OptRadio(key, value, label, y, onChange)
+	local name = "ZBagToolsOpt_" .. key .. "_" .. value
+	local cb = CreateFrame("CheckButton", name, opt, "OptionsCheckButtonTemplate")
+	cb:SetPoint("TOPLEFT", opt, "TOPLEFT", optX, y)
+	_G[name .. "Text"]:SetText(label)
+	cb:SetScript("OnClick", function()
+		ZBagToolsDB[key] = value
+		RefreshOptions()
+		if onChange then onChange() end
+	end)
+	cb.zbKey = key
+	cb.zbRadio = value
+	table.insert(optWidgets, cb)
+	return cb
+end
+
 -- toUI/fromUI: atvaltas a tarolt ertek es a csuszka erteke kozott (pl. scale %)
 local function OptSlider(key, y, minV, maxV, step, fmt, toUI, fromUI, onChange)
 	local name = "ZBagToolsOpt_" .. key
 	local sl = CreateFrame("Slider", name, opt, "OptionsSliderTemplate")
-	sl:SetPoint("TOPLEFT", opt, "TOPLEFT", 6, y)
+	sl:SetPoint("TOPLEFT", opt, "TOPLEFT", optX + 6, y)
 	sl:SetWidth(220)
 	sl:SetMinMaxValues(minV, maxV)
 	sl:SetValueStep(step)
@@ -1516,41 +2030,66 @@ RefreshOptions = function()
 			w:SetValue(v)
 			w.zbUpdating = false
 			_G[w.zbName .. "Text"]:SetText(string.format(w.zbFmt, v))
+		elseif w.zbRadio then
+			w:SetChecked(db[w.zbKey] == w.zbRadio)
 		else
 			w:SetChecked(db[w.zbKey] and true or false)
 		end
 	end
 end
 
--- Vendor
+local function RefreshDecor()
+	RefreshAllBagViews()
+end
+
+-------- bal oszlop --------
+optX = 0
+
 OptHeader("Vendor", 0)
 OptCheck("autoSell", "Auto sell grey items at vendors", -16, 0, UpdateSellButtons)
 OptCheck("sortAfterSell", "Sort bags after selling", -40)
 OptCheck("sellReport", "Show earnings in chat", -64)
-OptCheck("autoRepair", "Auto repair at vendors", -88)
-OptCheck("repairGuild", "Use guild bank funds first (experimental)", -112, 20)
+OptCheck("sellUnusable", "Also sell unusable soulbound gear", -88)
+OptCheck("autoRepair", "Auto repair at vendors", -112)
+OptCheck("repairGuild", "Use guild bank funds first (experimental)", -136, 20)
 
--- Bag space
-OptHeader("Bag space", -146)
-OptCheck("lowWarn", "Warn when bags are almost full", -162, 0, function() CheckLowSpace(false) end)
-OptSlider("lowThreshold", -206, 1, 20, 1, "Warn at %d free slots or less", nil, nil, function() CheckLowSpace(false) end)
+OptHeader("Sort", -170)
+OptRadio("sortMode", "fill", "Fill gaps only", -186)
+OptRadio("sortMode", "type", "Fill gaps + sort by type", -210)
+OptRadio("sortMode", "typeslot", "Sort by type + group same slot", -234)
 
--- Box window
-OptHeader("Box window", -244)
-OptSlider("cols", -278, 4, 24, 1, "Columns: %d", nil, nil, function() Layout() end)
-OptSlider("scale", -320, 50, 200, 10, "Scale: %d%%",
+OptHeader("Bag space", -268)
+OptCheck("lowWarn", "Warn when bags are almost full", -284, 0, function() CheckLowSpace(false) end)
+OptSlider("lowThreshold", -328, 1, 20, 1, "Warn at %d free slots or less", nil, nil, function() CheckLowSpace(false) end)
+
+-------- jobb oszlop --------
+optX = OPT_COL2
+
+OptHeader("Bag display", 0)
+OptCheck("tintUnusable", "Tint unusable items red", -16, 0, RefreshDecor)
+OptCheck("newGlow", "Highlight new items", -40, 0, RefreshDecor)
+
+OptHeader("Tooltip", -74)
+OptCheck("tipCounts", "Show item counts (bags, bank)", -90)
+OptCheck("tipAlts", "Include alt characters", -114, 20)
+
+OptHeader("Box window", -148)
+OptSlider("cols", -182, 4, 24, 1, "Columns: %d", nil, nil, function() Layout() end)
+OptSlider("scale", -224, 50, 200, 10, "Scale: %d%%",
 	function(v) return math.floor((v or 1) * 100 + 0.5) end,
 	function(v) return v / 100 end,
 	function() combined:SetScale(DB().scale) end)
-OptSlider("bgAlpha", -362, 20, 100, 5, "Background opacity: %d%%",
+OptSlider("bgAlpha", -266, 20, 100, 5, "Background opacity: %d%%",
 	function(v) return math.floor((v or 0.9) * 100 + 0.5) end,
 	function(v) return v / 100 end,
 	function() combined:SetBackdropColor(BG_R, BG_G, BG_B, DB().bgAlpha) end)
 
+OptNote("Alt+Right-click a bag slot to pin it.", -330)
+
 local resetBtn = CreateFrame("Button", "ZBagToolsOptReset", opt, "UIPanelButtonTemplate")
 resetBtn:SetWidth(130)
 resetBtn:SetHeight(20)
-resetBtn:SetPoint("TOPLEFT", opt, "TOPLEFT", 4, -392)
+resetBtn:SetPoint("TOPLEFT", opt, "TOPLEFT", OPT_COL2 + 4, -298)
 resetBtn:SetText("Reset window")
 resetBtn:SetScript("OnClick", function()
 	ZBagToolsDB.point = nil
@@ -1561,7 +2100,7 @@ resetBtn:SetScript("OnClick", function()
 	Layout()
 	RefreshOptions()
 end)
-SimpleTooltip(resetBtn, "Reset the Box window's position, scale, columns and opacity")
+SimpleTooltip(resetBtn, "Reset window", "Position, scale, columns and opacity")
 
 local function SetOptionsView(on)
 	combined.optionsMode = on and true or false
@@ -1571,12 +2110,16 @@ local function SetOptionsView(on)
 	if on then
 		search:Hide()
 		boxBar:Hide()       -- a gyors gombsor itt felesleges
+		resBtn:Hide()
+		boeBtn:Hide()
 		opt:Show()
 		optBtn:SetText("<- Back")
 		RefreshOptions()
 	else
 		search:Show()
 		boxBar:Show()
+		resBtn:Show()
+		boeBtn:Show()
 		opt:Hide()
 		optBtn:SetText("Options")
 	end
@@ -1611,6 +2154,163 @@ OpenOptions = function()
 end
 
 ----------------------------------------------------------------
+-- Gyari zsakablakok: ugyanaz a diszites (vedett jel, piros, feny)
+----------------------------------------------------------------
+
+local function UpdateOpenContainerFrames()
+	for i = 1, (NUM_CONTAINER_FRAMES or 13) do
+		local cf = _G["ContainerFrame" .. i]
+		if cf and cf:IsShown() then
+			local id = cf:GetID()
+			if id and id >= 0 and id <= 4 then
+				ContainerFrame_Update(cf)
+			end
+		end
+	end
+end
+
+hooksecurefunc("ContainerFrame_Update", function(frame)
+	local bag = frame:GetID()
+	if not bag or bag < 0 or bag > 4 then
+		return
+	end
+	local name = frame:GetName()
+	for j = 1, (frame.size or NumSlots(bag) or 0) do
+		local b = _G[name .. "Item" .. j]
+		if b then
+			DecorateButton(b, bag, b:GetID())
+		end
+	end
+end)
+
+RefreshAllBagViews = function()
+	RequestRefresh()
+	UpdateOpenContainerFrames()
+end
+
+-- Alt+jobb klikk egy sloton (gyari zsak es Box ablak is): vedett slot ki/be
+hooksecurefunc("ContainerFrameItemButton_OnModifiedClick", function(self, button)
+	if button ~= "RightButton" or not IsAltKeyDown() or IsShiftKeyDown() or IsControlKeyDown() then
+		return
+	end
+	local parent = self:GetParent()
+	local bag, slot = parent and parent:GetID(), self:GetID()
+	if not bag or bag < 0 or bag > 4 or not ZBagToolsDB then
+		return
+	end
+	local pins = Pins()
+	local key = bag .. ":" .. slot
+	if pins[key] then
+		pins[key] = nil
+		p("Slot unpinned.")
+	else
+		pins[key] = true
+		p("Slot pinned: Sort won't move it and selling won't touch it. Alt+Right-click again to unpin.")
+	end
+	RefreshAllBagViews()
+end)
+
+-- ha az egeret egy uj item fole viszed, azt mar "lattad"
+hooksecurefunc("ContainerFrameItemButton_OnEnter", function(self)
+	local parent = self:GetParent()
+	local bag = parent and parent:GetID()
+	if not bag or bag < 0 or bag > 4 then
+		return
+	end
+	local id = ParseItemID(GetLink(bag, self:GetID()))
+	if id and IsNewItem(id) then
+		MarkSeen(id)
+		if self.zbGlow then self.zbGlow:Hide() end
+		RefreshAllBagViews()
+	end
+end)
+
+-- amikor minden zsak bezarult: minden item "latott"
+local seenChecker = CreateFrame("Frame")
+local function CheckAllClosed()
+	seenChecker:SetScript("OnUpdate", function(self)
+		self:SetScript("OnUpdate", nil)
+		if not combined:IsShown() and not AnyBagOpen() then
+			MarkAllSeen()
+		end
+	end)
+end
+hooksecurefunc("ContainerFrame_OnHide", CheckAllClosed)
+combined:HookScript("OnHide", CheckAllClosed)
+
+----------------------------------------------------------------
+-- Tooltip: darabszam (zsak / bank / alt karakterek), vedett slot jelzes
+----------------------------------------------------------------
+
+local function IsBagItemButton(owner)
+	local n = owner and owner.GetName and owner:GetName()
+	return n and (n:find("^ContainerFrame%d+Item%d+$") or n:find("^ZBagToolsItem%d+_%d+$"))
+end
+
+local function AddTooltipInfo(tt)
+	local _, link = tt:GetItem()
+	local id = ParseItemID(link)
+	if not id then
+		return
+	end
+	local added = false
+
+	local owner = tt:GetOwner()
+	if IsBagItemButton(owner) then
+		local bag = owner:GetParent() and owner:GetParent():GetID()
+		if bag and bag >= 0 and bag <= 4 and IsPinned(bag, owner:GetID()) then
+			tt:AddLine("ZBag: pinned slot (Alt+Right-click to unpin)", 0.4, 0.8, 1)
+			added = true
+		end
+	end
+
+	if DB().tipCounts and ZBagToolsDB and ZBagToolsDB.chars then
+		local me = CharKey()
+		local d = ZBagToolsDB.chars[me] or {}
+		local bags = d.bags and d.bags[id] or 0
+		local bank = d.bank and d.bank[id] or 0
+		if bags > 0 then
+			tt:AddDoubleLine("Bags:", bags, 0.5, 0.8, 1, 1, 1, 1)
+			added = true
+		end
+		if bank > 0 then
+			tt:AddDoubleLine("Bank:", bank, 0.5, 0.8, 1, 1, 1, 1)
+			added = true
+		end
+		if DB().tipAlts then
+			local realm = (GetRealmName() or "?") .. "-"
+			for k, cd in pairs(ZBagToolsDB.chars) do
+				if k ~= me and k:sub(1, #realm) == realm then
+					local b = cd.bags and cd.bags[id] or 0
+					local k2 = cd.bank and cd.bank[id] or 0
+					if b + k2 > 0 then
+						tt:AddDoubleLine(k:sub(#realm + 1) .. ":", string.format("%d bags, %d bank", b, k2), 0.5, 0.8, 1, 1, 1, 1)
+						added = true
+					end
+				end
+			end
+		end
+	end
+	if added then
+		tt:Show()
+	end
+end
+
+GameTooltip:HookScript("OnTooltipSetItem", AddTooltipInfo)
+if ItemRefTooltip then
+	ItemRefTooltip:HookScript("OnTooltipSetItem", AddTooltipInfo)
+end
+
+-- bank mentese: a nyitott bankablak alatt minden valtozaskor (kovetkezo kepkockan)
+local bankSaver = CreateFrame("Frame")
+local function RequestBankSave()
+	bankSaver:SetScript("OnUpdate", function(self)
+		self:SetScript("OnUpdate", nil)
+		SaveBank()
+	end)
+end
+
+----------------------------------------------------------------
 -- Esemenyek
 ----------------------------------------------------------------
 
@@ -1623,6 +2323,9 @@ events:RegisterEvent("PLAYER_MONEY")
 events:RegisterEvent("UNIT_INVENTORY_CHANGED")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
 events:RegisterEvent("MODIFIER_STATE_CHANGED")
+events:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
+events:RegisterEvent("PLAYER_LEVEL_UP")
+events:RegisterEvent("SKILL_LINES_CHANGED")
 -- kereskedo / bank / posta: a nyitast-zarast az esemenyek vezerlik,
 -- igy nem fuggunk attol, melyik gyari nyito fuggvenyt hivja a kliens
 events:RegisterEvent("MERCHANT_SHOW")
@@ -1656,10 +2359,23 @@ events:SetScript("OnEvent", function(self, event, arg1)
 			UpdateSellButtons()
 			CloseAll()
 		end
-	elseif event == "BANKFRAME_OPENED" or event == "MAIL_SHOW" then
+	elseif event == "BANKFRAME_OPENED" then
+		bankOpen = true
+		RequestBankSave()
 		OpenModeView()
-	elseif event == "BANKFRAME_CLOSED" or event == "MAIL_CLOSED" then
+	elseif event == "BANKFRAME_CLOSED" then
+		bankOpen = false
 		CloseAll()
+	elseif event == "MAIL_SHOW" then
+		OpenModeView()
+	elseif event == "MAIL_CLOSED" then
+		CloseAll()
+	elseif event == "PLAYERBANKSLOTS_CHANGED" then
+		RequestBankSave()
+	elseif event == "PLAYER_LEVEL_UP" or event == "SKILL_LINES_CHANGED" then
+		-- uj szint / fegyverismeret: ujra kell nezni, mi hasznalhato
+		ClearScanCache()
+		RefreshAllBagViews()
 	elseif event == "MODIFIER_STATE_CHANGED" then
 		-- Shift/Ctrl lenyomasakor a Box ablak gombja alatti tooltip azonnal
 		-- frissul (osszehasonlitas, probababu kurzor)
@@ -1670,9 +2386,20 @@ events:SetScript("OnEvent", function(self, event, arg1)
 		end
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		CheckLowSpace(true)
+		SaveBags()
+		if not seenCounts then
+			MarkAllSeen()
+		end
 	else
 		if event == "BAG_UPDATE" then
-			RequestLowCheck()
+			if arg1 then
+				ClearScanCache(arg1)
+			end
+			if arg1 and (arg1 == -1 or arg1 >= 5) then
+				RequestBankSave()
+			else
+				RequestLowCheck()
+			end
 		end
 		RequestRefresh()
 	end
