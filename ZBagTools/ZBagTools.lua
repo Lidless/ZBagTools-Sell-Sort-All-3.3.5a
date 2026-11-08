@@ -104,6 +104,8 @@ local DEFAULTS = {
 	bgAlpha = 0.9,
 	sortMode = "fill",          -- fill | type | typeslot
 	sellUnusable = false,       -- nem hasznalhato soulbound felszereles eladasa
+	sellWorse = false,          -- minden statban rosszabb soulbound felszereles eladasa
+	keepUncollected = true,     -- ...kiveve, ha a kinezete meg nincs osszegyujtve
 	tintUnusable = true, newGlow = true,
 	tipCounts = false, tipAlts = false,
 }
@@ -196,6 +198,9 @@ local TXT_SOULBOUND = ITEM_SOULBOUND or "Soulbound"
 local TXT_BOE = ITEM_BIND_ON_EQUIP or "Binds when equipped"
 local TXT_CLASSES = (ITEM_CLASSES_ALLOWED or "Classes: %s"):gsub("%%s", "")
 local TXT_RACES = (ITEM_RACES_ALLOWED or "Races: %s"):gsub("%%s", "")
+local TXT_USE = ITEM_SPELL_TRIGGER_ONUSE or "Use:"
+local TXT_PROC = ITEM_SPELL_TRIGGER_ONPROC or "Chance on hit:"
+local TXT_EQUIP = ITEM_SPELL_TRIGGER_ONEQUIP or "Equip:"
 
 local function IsRedText(fs)
 	local r, g, b = fs:GetTextColor()
@@ -242,6 +247,19 @@ local function ScanSlot(bag, slot)
 				info.soulbound = true
 			elseif lt == TXT_BOE then
 				info.boe = true
+			end
+			-- kulonleges hatas: Use: / Chance on hit: / set bonusz, vagy olyan
+			-- Equip: sor, ami nem sima stat ("... by 20." / "... per 5 sec.")
+			if lt:sub(1, #TXT_USE) == TXT_USE or lt:sub(1, #TXT_PROC) == TXT_PROC
+				or lt:sub(1, 4) == "Set:" or lt:find("%(%d+/%d+%)$") then
+				info.special = true
+			elseif lt:sub(1, #TXT_EQUIP) == TXT_EQUIP then
+				if not (lt:find(" by %d+%.?$") or lt:find("per 5 sec%.?$")) then
+					info.special = true
+				end
+			end
+			if lt:find("haven't collected this appearance", 1, true) then
+				info.uncollected = true
 			end
 			if IsRedText(l) then
 				info.red = true
@@ -435,7 +453,78 @@ local function DecorateButton(b, bag, slot)
 end
 
 ----------------------------------------------------------------
--- Sell Grey (+ opcionalisan a nem hasznalhato soulbound felszereles)
+-- "Minden statban rosszabb", mint ami rajtad van ugyanazon a helyen.
+-- GetItemStats: elsodleges/masodlagos statok, pancel, DPS, socketek.
+-- Rosszabb = egyik statban sem jobb, es legalabb egyben rosszabb.
+-- Ket helyre veheto itemnel (gyuru, trinket, egykezes fegyver) mindket
+-- felvett darabnal rosszabbnak kell lennie; ha valamelyik hely ures, vagy
+-- nem osszevetheto (pl. ketkezes van rajtad), megtartjuk.
+----------------------------------------------------------------
+
+local EQUIP_SLOTS = {
+	INVTYPE_HEAD = {1}, INVTYPE_NECK = {2}, INVTYPE_SHOULDER = {3},
+	INVTYPE_CHEST = {5}, INVTYPE_ROBE = {5}, INVTYPE_WAIST = {6},
+	INVTYPE_LEGS = {7}, INVTYPE_FEET = {8}, INVTYPE_WRIST = {9},
+	INVTYPE_HAND = {10}, INVTYPE_FINGER = {11, 12}, INVTYPE_TRINKET = {13, 14},
+	INVTYPE_CLOAK = {15}, INVTYPE_2HWEAPON = {16}, INVTYPE_WEAPONMAINHAND = {16},
+	INVTYPE_SHIELD = {17}, INVTYPE_WEAPONOFFHAND = {17}, INVTYPE_HOLDABLE = {17},
+	INVTYPE_RANGED = {18}, INVTYPE_RANGEDRIGHT = {18}, INVTYPE_THROWN = {18},
+	INVTYPE_RELIC = {18},
+	INVTYPE_WEAPON = {16, 17},
+}
+
+local ONEHAND_OK = {INVTYPE_WEAPON = true, INVTYPE_WEAPONMAINHAND = true, INVTYPE_WEAPONOFFHAND = true}
+
+local function StatsWorse(cand, eq)
+	if not cand or not eq then
+		return false
+	end
+	local worse = false
+	for k, v in pairs(cand) do
+		if v > (eq[k] or 0) then
+			return false
+		elseif v < (eq[k] or 0) then
+			worse = true
+		end
+	end
+	for k, v in pairs(eq) do
+		if cand[k] == nil and v > 0 then
+			worse = true
+		end
+	end
+	return worse
+end
+
+local function IsWorseThanEquipped(link, equipLoc)
+	local slots = EQUIP_SLOTS[equipLoc or ""]
+	if not slots or not GetItemStats then
+		return false
+	end
+	local cand = GetItemStats(link)
+	if not cand then
+		return false
+	end
+	for _, invSlot in ipairs(slots) do
+		local eqLink = GetInventoryItemLink("player", invSlot)
+		if not eqLink then
+			return false                   -- ures hely: megtartjuk
+		end
+		local _, _, _, _, _, _, _, _, eqLoc = GetItemInfo(eqLink)
+		if equipLoc == "INVTYPE_WEAPON" and not ONEHAND_OK[eqLoc or ""] then
+			return false                   -- ketkezes / pajzs van ott: nem osszevetheto
+		end
+		if equipLoc == "INVTYPE_2HWEAPON" and eqLoc ~= "INVTYPE_2HWEAPON" then
+			return false
+		end
+		if not StatsWorse(cand, GetItemStats(eqLink)) then
+			return false
+		end
+	end
+	return true
+end
+
+----------------------------------------------------------------
+-- Sell Grey (+ opcionalisan a nem hasznalhato / elavult soulbound felszereles)
 ----------------------------------------------------------------
 
 local function IsGrey(link, quality)
@@ -466,8 +555,9 @@ local function SellGrey(auto)
 	end
 	local soldSlots = {}
 	local earned = 0
-	local greys, unusable = 0, 0
+	local greys, unusable, worse = 0, 0, 0
 	local sellUnusable = DB().sellUnusable
+	local sellWorse = DB().sellWorse
 	for _, bag in ipairs(BAGS) do
 		local slots = NumSlots(bag)
 		for slot = 1, slots do
@@ -477,15 +567,22 @@ local function SellGrey(auto)
 				if IsGrey(link, nil) then
 					sell = true
 					greys = greys + 1
-				elseif sellUnusable then
-					-- soulbound felszereles, amit kaszt / pancel- vagy fegyvertipus
-					-- miatt nem hasznalhatsz (szintigeny miatt nem adjuk el)
+				elseif sellUnusable or sellWorse then
 					local _, _, _, _, _, _, _, _, equipLoc, _, price = GetItemInfo(link)
 					if equipLoc and equipLoc ~= "" and price and price > 0 then
 						local info = ScanSlot(bag, slot)
-						if info and info.soulbound and info.classRed then
-							sell = true
-							unusable = unusable + 1
+						if info and info.soulbound then
+							if sellUnusable and info.classRed then
+								-- kaszt / pancel- vagy fegyvertipus miatt nem hasznalhato
+								-- (szintigeny miatt nem adjuk el)
+								sell = true
+								unusable = unusable + 1
+							elseif sellWorse and not info.special and not info.red
+								and not (info.uncollected and DB().keepUncollected)
+								and IsWorseThanEquipped(link, equipLoc) then
+								sell = true
+								worse = worse + 1
+							end
 						end
 					end
 				end
@@ -503,6 +600,7 @@ local function SellGrey(auto)
 		local parts = {}
 		if greys > 0 then table.insert(parts, greys .. " grey item(s)") end
 		if unusable > 0 then table.insert(parts, unusable .. " unusable item(s)") end
+		if worse > 0 then table.insert(parts, worse .. " outdated item(s)") end
 		local msg = (auto and "Auto-sold " or "Sold ") .. table.concat(parts, " and ")
 		if DB().sellReport and earned > 0 then
 			msg = msg .. " for " .. FormatMoney(earned)
@@ -974,7 +1072,7 @@ local FOOTER = 38
 local MIN_WIDTH = 320
 local OPT_WIDTH = 600
 local OPT_TOP = 32      -- opcios nezetben nincs gombsor/kereso, feljebb kezdodik
-local OPT_HEIGHT = OPT_TOP + 366 + FOOTER
+local OPT_HEIGHT = OPT_TOP + 414 + FOOTER
 
 local combined = CreateFrame("Frame", "ZBagToolsCombined", UIParent)
 combined:Hide()
@@ -2056,17 +2154,19 @@ OptCheck("autoSell", "Auto sell grey items at vendors", -16, 0, UpdateSellButton
 OptCheck("sortAfterSell", "Sort bags after selling", -40)
 OptCheck("sellReport", "Show earnings in chat", -64)
 OptCheck("sellUnusable", "Also sell unusable soulbound gear", -88)
-OptCheck("autoRepair", "Auto repair at vendors", -112)
-OptCheck("repairGuild", "Use guild bank funds first (experimental)", -136, 20)
+OptCheck("sellWorse", "Also sell gear worse than equipped", -112)
+OptCheck("keepUncollected", "Keep if appearance not collected", -136, 20)
+OptCheck("autoRepair", "Auto repair at vendors", -160)
+OptCheck("repairGuild", "Use guild bank funds first (experimental)", -184, 20)
 
-OptHeader("Sort", -170)
-OptRadio("sortMode", "fill", "Fill gaps only", -186)
-OptRadio("sortMode", "type", "Fill gaps + sort by type", -210)
-OptRadio("sortMode", "typeslot", "Sort by type + group same slot", -234)
+OptHeader("Sort", -218)
+OptRadio("sortMode", "fill", "Fill gaps only", -234)
+OptRadio("sortMode", "type", "Fill gaps + sort by type", -258)
+OptRadio("sortMode", "typeslot", "Sort by type + group same slot", -282)
 
-OptHeader("Bag space", -268)
-OptCheck("lowWarn", "Warn when bags are almost full", -284, 0, function() CheckLowSpace(false) end)
-OptSlider("lowThreshold", -328, 1, 20, 1, "Warn at %d free slots or less", nil, nil, function() CheckLowSpace(false) end)
+OptHeader("Bag space", -316)
+OptCheck("lowWarn", "Warn when bags are almost full", -332, 0, function() CheckLowSpace(false) end)
+OptSlider("lowThreshold", -376, 1, 20, 1, "Warn at %d free slots or less", nil, nil, function() CheckLowSpace(false) end)
 
 -------- jobb oszlop --------
 optX = OPT_COL2

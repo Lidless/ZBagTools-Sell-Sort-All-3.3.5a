@@ -53,6 +53,7 @@ Sells every grey (poor quality) item in your bags in one click. Left-click only 
 - **Sort after selling:** whenever something was actually sold (manually or automatically), Sort runs by itself once the sold items have left your bags. After a sale it only reports in chat if it actually moved something.
 - **Earnings:** the chat message shows how much the greys sold for, e.g. `Sold 7 grey item(s) for 1g 23s 40c.`
 - **Unusable soulbound gear (Options, off by default):** also sells soulbound gear you can't use because of your class or its armor/weapon type. Items that are only red because of a level requirement are kept.
+- **Gear worse than equipped (Options, off by default):** also sells soulbound gear that is no better in any stat (including armor, DPS and sockets) and worse in at least one than what you wear in the same slot. Rings, trinkets and one-hand weapons must be worse than both equipped pieces; nothing is sold for an empty slot, or when the two can't be compared (e.g. a one-hander while you wear a two-hander). Items with special effects (Use:, Chance on hit:, set bonuses, non-stat Equip: lines) and items you can't wear yet are kept. With "Keep if appearance not collected" (on by default) items whose appearance you haven't collected are kept too. Stats are compared without gems and enchants.
 - Items in pinned slots are never sold.
 
 ### Pinned slots (Alt+Right-click)
@@ -84,7 +85,7 @@ The `X` in the top-right corner of the Backpack window and of the combined windo
 
 All settings in one place, shown inside the combined window in place of the item grid:
 
-- **Vendor:** auto sell, sort after selling, show earnings, also sell unusable soulbound gear, auto repair, use guild bank funds first (experimental)
+- **Vendor:** auto sell, sort after selling, show earnings, also sell unusable soulbound gear, also sell gear worse than equipped (keep if appearance not collected), auto repair, use guild bank funds first (experimental)
 - **Sort:** fill gaps only / fill gaps + sort by type / sort by type + group same slot
 - **Bag space:** low space warning and its threshold
 - **Bag display:** tint unusable items red, highlight new items
