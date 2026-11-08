@@ -226,6 +226,10 @@ local function ScanSlot(bag, slot)
 		return c
 	end
 	local info = {link = link, soulbound = false, boe = false, red = false, classRed = false}
+	-- a felszereles helyenek neve (pl. "One-Hand", "Chest"): ha ez piros,
+	-- a fegyvert / pancelt nem tudod hasznalni (nincs hozza ismereted)
+	local _, _, _, _, _, _, _, _, equipLoc = GetItemInfo(link)
+	local slotName = equipLoc and equipLoc ~= "" and _G[equipLoc]
 	scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
 	scanTip:ClearLines()
 	scanTip:SetBagItem(bag, slot)
@@ -241,12 +245,14 @@ local function ScanSlot(bag, slot)
 			end
 			if IsRedText(l) then
 				info.red = true
-				if lt:sub(1, #TXT_CLASSES) == TXT_CLASSES or lt:sub(1, #TXT_RACES) == TXT_RACES then
+				if lt:sub(1, #TXT_CLASSES) == TXT_CLASSES or lt:sub(1, #TXT_RACES) == TXT_RACES
+					or (slotName and lt == slotName) then
 					info.classRed = true
 				end
 			end
 		end
-		-- a jobb oldali piros szoveg a pancel-/fegyvertipus (pl. "Plate", "Polearm")
+		-- a jobb oldali piros szoveg a pancel-/fegyvertipus (pl. "Plate", "Polearm");
+		-- fegyvereknel a bal oldali hely-nev lehet piros (pl. "One-Hand"), azt fent nezzuk
 		if r and r:IsShown() and r:GetText() and IsRedText(r) then
 			info.red = true
 			info.classRed = true
