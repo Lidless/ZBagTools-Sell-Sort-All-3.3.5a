@@ -168,18 +168,103 @@ local function CharKey()
 	return (GetRealmName() or "?") .. "-" .. (UnitName("player") or "?")
 end
 
+-- A lakat az ITEMHEZ tartozik, nem a slothoz: karakterenkent egy lista,
+-- elemei {l = item link, k = "bag:slot" vagy nil}. Ha a lezart itemet
+-- athelyezed, a lakat vele megy (ReconcilePins). Ha az item kikerul a
+-- zsakokbol (pl. felveszed), a lakat "lebeg" (k = nil), es amikor ugyanez
+-- az item visszakerul, ujra raul.
 local function Pins()
 	if not ZBagToolsDB then
 		return {}
 	end
 	ZBagToolsDB.pins = ZBagToolsDB.pins or {}
 	local k = CharKey()
-	ZBagToolsDB.pins[k] = ZBagToolsDB.pins[k] or {}
-	return ZBagToolsDB.pins[k]
+	local list = ZBagToolsDB.pins[k]
+	if type(list) ~= "table" then
+		list = {}
+		ZBagToolsDB.pins[k] = list
+	end
+	return list
 end
 
 local function IsPinned(bag, slot)
-	return Pins()[bag .. ":" .. slot] and true or false
+	local key = bag .. ":" .. slot
+	for _, e in ipairs(Pins()) do
+		if e.k == key then
+			return true
+		end
+	end
+	return false
+end
+
+-- regi (slothoz kotott) formatum atalakitasa: ahol most item van, az
+-- itemhez kotjuk, az ures slotok lakatja megszunik
+local function MigratePins()
+	if not ZBagToolsDB or not ZBagToolsDB.pins then
+		return
+	end
+	local list = ZBagToolsDB.pins[CharKey()]
+	if type(list) ~= "table" or list[1] or next(list) == nil then
+		return
+	end
+	local new = {}
+	for key, v in pairs(list) do
+		if v == true then
+			local b, sl = key:match("^(%-?%d+):(%d+)$")
+			local link = b and GetLink(tonumber(b), tonumber(sl))
+			if link then
+				table.insert(new, {l = link, k = key})
+			end
+		end
+	end
+	ZBagToolsDB.pins[CharKey()] = new
+end
+
+local prevLinks = nil
+
+local function ReconcilePins()
+	if not ZBagToolsDB then
+		return
+	end
+	local cur = {}
+	for _, bag in ipairs(BAGS) do
+		for slot = 1, (NumSlots(bag) or 0) do
+			cur[bag .. ":" .. slot] = GetLink(bag, slot)
+		end
+	end
+	local list = Pins()
+	local taken = {}
+	for _, e in ipairs(list) do
+		if e.k and cur[e.k] == e.l then
+			taken[e.k] = true
+		end
+	end
+	for _, e in ipairs(list) do
+		if not (e.k and cur[e.k] == e.l) then
+			-- az item elmozdult: hova kerult? elobb az "ujonnan erkezett"
+			-- helyet keressuk (ott elozoleg nem ez az item volt)
+			local found
+			for key, link in pairs(cur) do
+				if link == e.l and not taken[key] and not (prevLinks and prevLinks[key] == e.l) then
+					found = key
+					break
+				end
+			end
+			if not found and not prevLinks then
+				for key, link in pairs(cur) do
+					if link == e.l and not taken[key] then
+						found = key
+						break
+					end
+				end
+			end
+			e.k = found
+			if found then
+				taken[found] = true
+			end
+		end
+	end
+	prevLinks = cur
 end
 
 ----------------------------------------------------------------
@@ -201,6 +286,7 @@ local TXT_RACES = (ITEM_RACES_ALLOWED or "Races: %s"):gsub("%%s", "")
 local TXT_USE = ITEM_SPELL_TRIGGER_ONUSE or "Use:"
 local TXT_PROC = ITEM_SPELL_TRIGGER_ONPROC or "Chance on hit:"
 local TXT_EQUIP = ITEM_SPELL_TRIGGER_ONEQUIP or "Equip:"
+local TXT_EQSET = (EQUIPMENT_SETS or "Equipment Sets: %s"):gsub("%%s", "")
 
 local function IsRedText(fs)
 	local r, g, b = fs:GetTextColor()
@@ -261,6 +347,9 @@ local function ScanSlot(bag, slot)
 			if lt:find("haven't collected this appearance", 1, true) then
 				info.uncollected = true
 			end
+			if lt:sub(1, #TXT_EQSET) == TXT_EQSET then
+				info.equipSet = true
+			end
 			if IsRedText(l) then
 				info.red = true
 				if lt:sub(1, #TXT_CLASSES) == TXT_CLASSES or lt:sub(1, #TXT_RACES) == TXT_RACES
@@ -282,6 +371,56 @@ local function ScanSlot(bag, slot)
 		scanCache[key] = info   -- mozgatas kozben (zarolt slot) nem taroljuk
 	end
 	return info
+end
+
+-- Equipment Manager szetthez tartozo item. Elsodlegesen a jatek sajat
+-- szett-nyilvantartasabol (GetEquipmentSetLocations: ez kovetkezik az itemet,
+-- ha athelyezed), tartalekkent a tooltip "Equipment Sets: ..." soraból.
+local setLocs, setStamp = {}, nil
+
+local function SetLocations()
+	local t = GetTime()
+	if setStamp == t then
+		return setLocs
+	end
+	setStamp = t
+	setLocs = {}
+	if not (GetNumEquipmentSets and GetEquipmentSetInfo and GetEquipmentSetLocations
+		and EquipmentManager_UnpackLocation) then
+		return setLocs
+	end
+	for i = 1, GetNumEquipmentSets() do
+		local name = GetEquipmentSetInfo(i)
+		local locs = name and GetEquipmentSetLocations(name)
+		if locs then
+			for _, loc in pairs(locs) do
+				if loc and loc > 0 then
+					local player, bank, bags, slot, bag = EquipmentManager_UnpackLocation(loc)
+					if bags and bag and slot then
+						setLocs[bag .. ":" .. slot] = true
+					end
+				end
+			end
+		end
+	end
+	return setLocs
+end
+
+local function IsSetItem(bag, slot)
+	if not GetLink(bag, slot) then
+		return false
+	end
+	if SetLocations()[bag .. ":" .. slot] then
+		return true
+	end
+	local info = ScanSlot(bag, slot)
+	return info and info.equipSet or false
+end
+
+-- lezart = vedett slot VAGY Equipment Manager szett resze: nem rendezzuk,
+-- nem adjuk el, es lakat jelzi
+local function IsLocked(bag, slot)
+	return IsPinned(bag, slot) or IsSetItem(bag, slot)
 end
 
 ----------------------------------------------------------------
@@ -426,7 +565,7 @@ local function DecorateButton(b, bag, slot)
 		b.zbGlow = g
 	end
 
-	if IsPinned(bag, slot) then b.zbPin:Show() else b.zbPin:Hide() end
+	if IsLocked(bag, slot) then b.zbPin:Show() else b.zbPin:Hide() end
 
 	local link = GetLink(bag, slot)
 	local icon = _G[b:GetName() .. "IconTexture"]
@@ -562,7 +701,7 @@ local function SellGrey(auto)
 		local slots = NumSlots(bag)
 		for slot = 1, slots do
 			local link = GetLink(bag, slot)
-			if link and not IsPinned(bag, slot) then
+			if link and not IsLocked(bag, slot) then
 				local sell = false
 				if IsGrey(link, nil) then
 					sell = true
@@ -651,7 +790,7 @@ local function Snapshot()
 				bag = bag, slot = slot, bagType = bagType,
 				link = link, itemID = itemID, count = count,
 				locked = locked and true or false,
-				pinned = IsPinned(bag, slot),
+				pinned = IsLocked(bag, slot),
 			})
 		end
 	end
@@ -1410,8 +1549,10 @@ local function RequestLowCheck()
 	lowChecker:SetScript("OnUpdate", function(self)
 		self:SetScript("OnUpdate", nil)
 		lowCheckPending = false
+		ReconcilePins()
 		CheckLowSpace(true)
 		SaveBags()
+		RefreshAllBagViews()
 	end)
 end
 combined.Refresh = RefreshCombined
@@ -2190,7 +2331,7 @@ OptSlider("bgAlpha", -266, 20, 100, 5, "Background opacity: %d%%",
 	function(v) return v / 100 end,
 	function() combined:SetBackdropColor(BG_R, BG_G, BG_B, DB().bgAlpha) end)
 
-OptNote("Alt+Right-click a bag slot to pin it.", -330)
+OptNote("Alt+Right-click an item to lock it.", -330)
 
 local resetBtn = CreateFrame("Button", "ZBagToolsOptReset", opt, "UIPanelButtonTemplate")
 resetBtn:SetWidth(130)
@@ -2306,13 +2447,21 @@ hooksecurefunc("ContainerFrameItemButton_OnModifiedClick", function(self, button
 	end
 	local pins = Pins()
 	local key = bag .. ":" .. slot
-	if pins[key] then
-		pins[key] = nil
-		p("Slot unpinned.")
-	else
-		pins[key] = true
-		p("Slot pinned: Sort won't move it and selling won't touch it. Alt+Right-click again to unpin.")
+	for i, e in ipairs(pins) do
+		if e.k == key then
+			table.remove(pins, i)
+			p("Item unlocked.")
+			RefreshAllBagViews()
+			return
+		end
 	end
+	local link = GetLink(bag, slot)
+	if not link then
+		p("Only items can be locked.")
+		return
+	end
+	table.insert(pins, {l = link, k = key})
+	p("Item locked: Sort won't move it and selling won't touch it; the lock moves with the item. Alt+Right-click again to unlock.")
 	RefreshAllBagViews()
 end)
 
@@ -2344,6 +2493,26 @@ end
 hooksecurefunc("ContainerFrame_OnHide", CheckAllClosed)
 combined:HookScript("OnHide", CheckAllClosed)
 
+-- Athelyezes utan a jatek kis kesessel frissiti a szett-helyeket es a
+-- tooltipet; ezert valtozas utan ~0.5 mp-cel ujraolvasunk es ujrarajzolunk,
+-- hogy a lakat (es a piros / feny) az itemmel egyutt mozogjon.
+local decorTimer = CreateFrame("Frame")
+local decorWait = 0
+local function RequestDelayedDecor()
+	decorWait = 0.5
+	decorTimer:SetScript("OnUpdate", function(self, elapsed)
+		decorWait = decorWait - elapsed
+		if decorWait > 0 then
+			return
+		end
+		self:SetScript("OnUpdate", nil)
+		ClearScanCache()
+		setStamp = nil
+		ReconcilePins()
+		RefreshAllBagViews()
+	end)
+end
+
 ----------------------------------------------------------------
 -- Tooltip: darabszam (zsak / bank / alt karakterek), vedett slot jelzes
 ----------------------------------------------------------------
@@ -2364,9 +2533,14 @@ local function AddTooltipInfo(tt)
 	local owner = tt:GetOwner()
 	if IsBagItemButton(owner) then
 		local bag = owner:GetParent() and owner:GetParent():GetID()
-		if bag and bag >= 0 and bag <= 4 and IsPinned(bag, owner:GetID()) then
-			tt:AddLine("ZBag: pinned slot (Alt+Right-click to unpin)", 0.4, 0.8, 1)
-			added = true
+		if bag and bag >= 0 and bag <= 4 then
+			if IsPinned(bag, owner:GetID()) then
+				tt:AddLine("ZBag: locked (Alt+Right-click to unlock)", 0.4, 0.8, 1)
+				added = true
+			elseif IsSetItem(bag, owner:GetID()) then
+				tt:AddLine("ZBag: locked (equipment set)", 0.4, 0.8, 1)
+				added = true
+			end
 		end
 	end
 
@@ -2432,6 +2606,7 @@ events:RegisterEvent("MODIFIER_STATE_CHANGED")
 events:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
 events:RegisterEvent("PLAYER_LEVEL_UP")
 events:RegisterEvent("SKILL_LINES_CHANGED")
+events:RegisterEvent("EQUIPMENT_SETS_CHANGED")
 -- kereskedo / bank / posta: a nyitast-zarast az esemenyek vezerlik,
 -- igy nem fuggunk attol, melyik gyari nyito fuggvenyt hivja a kliens
 events:RegisterEvent("MERCHANT_SHOW")
@@ -2478,7 +2653,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
 		CloseAll()
 	elseif event == "PLAYERBANKSLOTS_CHANGED" then
 		RequestBankSave()
-	elseif event == "PLAYER_LEVEL_UP" or event == "SKILL_LINES_CHANGED" then
+	elseif event == "PLAYER_LEVEL_UP" or event == "SKILL_LINES_CHANGED" or event == "EQUIPMENT_SETS_CHANGED" then
 		-- uj szint / fegyverismeret: ujra kell nezni, mi hasznalhato
 		ClearScanCache()
 		RefreshAllBagViews()
@@ -2491,12 +2666,17 @@ events:SetScript("OnEvent", function(self, event, arg1)
 			ContainerFrameItemButton_OnEnter(focus)
 		end
 	elseif event == "PLAYER_ENTERING_WORLD" then
+		MigratePins()
+		ReconcilePins()
 		CheckLowSpace(true)
 		SaveBags()
 		if not seenCounts then
 			MarkAllSeen()
 		end
 	else
+		if event == "BAG_UPDATE" or event == "ITEM_LOCK_CHANGED" then
+			RequestDelayedDecor()
+		end
 		if event == "BAG_UPDATE" then
 			if arg1 then
 				ClearScanCache(arg1)

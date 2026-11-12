@@ -43,7 +43,7 @@ Cleans up your bags in one click, across the Backpack and bags 1-4, in three pha
 
    Special bag slots only receive items that fit them, and items are never pulled out of a special bag into a normal one.
 
-Locked and pinned slots are skipped. Before every pass Sort waits for the server to confirm the previous moves, so you only need to press it once.
+Locked slots and locked items are skipped. Before every pass Sort waits for the server to confirm the previous moves, so you only need to press it once.
 
 ### Sell Grey (`Sell` button / `/zsell`)
 
@@ -54,11 +54,13 @@ Sells every grey (poor quality) item in your bags in one click. Left-click only 
 - **Earnings:** the chat message shows how much the greys sold for, e.g. `Sold 7 grey item(s) for 1g 23s 40c.`
 - **Unusable soulbound gear (Options, off by default):** also sells soulbound gear you can't use because of your class or its armor/weapon type. Items that are only red because of a level requirement are kept.
 - **Gear worse than equipped (Options, off by default):** also sells soulbound gear that is no better in any stat (including armor, DPS and sockets) and worse in at least one than what you wear in the same slot. Rings, trinkets and one-hand weapons must be worse than both equipped pieces; nothing is sold for an empty slot, or when the two can't be compared (e.g. a one-hander while you wear a two-hander). Items with special effects (Use:, Chance on hit:, set bonuses, non-stat Equip: lines) and items you can't wear yet are kept. With "Keep if appearance not collected" (on by default) items whose appearance you haven't collected are kept too. Stats are compared without gems and enchants.
-- Items in pinned slots are never sold.
+- Locked items (including Equipment Manager set items) are never sold.
 
-### Pinned slots (Alt+Right-click)
+### Locked items (Alt+Right-click)
 
-Alt+Right-click a bag slot (in the default bag windows or the combined window) to pin it; do it again to unpin. A gold lock marks pinned slots and their tooltip says so. Sort never moves the item in a pinned slot and selling never touches it; an empty pinned slot stays free. Pins are saved per character.
+Alt+Right-click an item (in the default bag windows or the combined window) to lock it; do it again to unlock. A gold lock marks locked items and their tooltip says so. The lock belongs to the item, not the slot: move the item and the lock moves with it (also between bags, when swapping, or with several identical items). If a locked item leaves your bags (equipped, banked) the lock waits and comes back with it. Sort never moves, merges or splits a locked item and selling never touches it. Locks are saved per character.
+
+Items that belong to an Equipment Manager set are always locked automatically (tooltip: `ZBag: locked (equipment set)`).
 
 ### Bag display (Options)
 
